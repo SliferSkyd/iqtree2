@@ -1199,6 +1199,13 @@ void reportSubstitutionProcess(ostream &out, Params &params, IQTree &tree)
         else
             out << "  ID  Model           Speed  Parameters" << endl;
         //out << "-------------------------------------" << endl;
+        
+        Checkpoint* ckp = tree.getCheckpoint();
+        ckp->startStruct("matrix");
+
+        stringstream ss;
+        double full_mat[400];
+
         for (it = stree->begin(), part = 0; it != stree->end(); it++, part++) {
             out.width(4);
             out << right << (part+1) << "  ";
@@ -1207,8 +1214,11 @@ void reportSubstitutionProcess(ostream &out, Params &params, IQTree &tree)
                 out << left << (*it)->getModelName() << " " << (*it)->treeLength() << "  " << (*it)->getModelNameParams(show_full_params) << endl;
             else
                 out << left << (*it)->getModelName() << " " << stree->part_info[part].part_rate  << "  " << (*it)->getModelNameParams(show_full_params) << endl;
+                ckp->putArray(std::to_string(part), (*it)->getModel()->num_states * (*it)->getModel()->num_states, full_mat);      
         }
+        ckp->endStruct();
         out << endl;
+        
         /*
         for (it = stree->begin(), part = 0; it != stree->end(); it++, part++) {
             reportModel(out, *(*it));
@@ -4330,6 +4340,641 @@ void doSymTest(Alignment *alignment, Params &params) {
         exit(EXIT_SUCCESS);
 }
 
+
+vector<double> calcRate(Alignment *aln) {    
+    double begin_wallclock_time = getRealTime();
+    double begin_cpu_time = getCPUTime();
+
+    vector<double> rates;
+    vector<vector<vector<int>>> sequences(aln->size());
+
+    for (int i = 0; i < aln->size(); ++i) {
+        Pattern p = aln->at(i);
+        if (p.isConst()) continue;
+        map<StateType, vector<int>> states;
+        for (int j = 0; j < p.size(); ++j) {
+            states[p[j]].push_back(j);
+        }
+        
+        for (auto it = states.begin(); it != states.end(); ++it)
+            sequences[i].push_back(it->second);
+    }
+    vector<double> ratePatterns(aln->size());
+    
+    #ifdef _OPENMP
+    #pragma omp parallel for schedule(dynamic,1)
+    #endif
+    for (int i = 0; i < aln->size(); ++i) {
+        if (aln->at(i).isConst()) {
+            ratePatterns[i] = 1.0;
+            continue;
+        }
+        vector<int> inSeq(aln->getNSeq());
+        for (int j = 0; j < sequences[i].size(); ++j) {
+            for (auto x : sequences[i][j]) {
+                inSeq[x] = j;
+            }
+        }
+
+        int totalCount = 0;
+        double score = 0;
+        for (int j = 0; j < aln->size(); ++j) {
+            if (aln->at(j).isConst()) continue;
+            int cnt = 0;
+            totalCount += aln->at(j).frequency;
+            for (auto seq2 : sequences[j]) {
+                int idx = inSeq[seq2[0]];
+                auto seq = sequences[i][idx];
+                bool found = true;
+                for (int x = 0, y = 0; x < seq2.size(); ++x) {
+                    while (y < seq.size() && seq[y] != seq2[x]) ++y;
+                    if (y == seq.size()) {
+                        found = false;
+                        break;
+                    }
+                    ++y;
+                }
+                if (found) ++cnt;
+            }
+            score += 1.0 * cnt / sequences[j].size() * aln->at(j).frequency;
+        }
+        ratePatterns[i] = score / totalCount;
+    }
+    for (int i = 0; i < aln->getNSite(); ++i)
+        rates.push_back(ratePatterns[aln->getPatternID(i)]);
+    std::cout << "TIGER took "
+    << convert_time(getRealTime() - begin_wallclock_time) << " (of wall-clock time) "
+    << convert_time(getCPUTime() - begin_cpu_time) << " (of CPU time)" << endl;
+
+    return rates;
+}
+
+vector<double> calcRateFast(Alignment *aln) {    
+    double begin_wallclock_time = getRealTime();
+    double begin_cpu_time = getCPUTime();
+
+    vector<vector<int>> f(aln->getNSeq(), vector<int>(aln->getNSeq(), 0));
+
+    for (int i = 0; i < aln->getNSeq(); ++i) 
+        for (int j = i + 1; j < aln->getNSeq(); ++j) {
+            #ifdef _OPENMP
+            #pragma omp parallel for schedule(dynamic,1)
+            #endif
+            for (int k = 0; k < aln->getNSite(); ++k) {
+                if (aln->at(aln->getPatternID(k))[i] == aln->at(aln->getPatternID(k))[j])
+                    #ifdef _OPENMP
+                    #pragma omp critical
+                    #endif
+                    ++f[i][j];
+            }
+        }
+    long long total = 0;
+    for (int i = 0; i < aln->getNSeq(); ++i) 
+        for (int j = i + 1; j < aln->getNSeq(); ++j) 
+            total += f[i][j];
+    vector<double> rates(aln->getNSite());
+
+    #ifdef _OPENMP
+    #pragma omp parallel for schedule(dynamic,1)
+    #endif
+    for (int i = 0; i < aln->getNSite(); ++i) {
+        map<StateType, vector<int>> states;
+        for (int j = 0; j < aln->getNSeq(); ++j) {
+            #ifdef _OPENMP
+            #pragma omp critical
+            #endif
+            states[aln->at(aln->getPatternID(i))[j]].push_back(j);
+        }
+        long long same = 0;
+        for (auto it = states.begin(); it != states.end(); ++it) {
+            for (int j = 0; j < it->second.size(); ++j) {
+                for (int k = j + 1; k < it->second.size(); ++k) {
+                    same += f[it->second[j]][it->second[k]];
+                }
+            }
+        }
+        rates[i] = 1 - 1.0 * same / total;
+    }
+    std::cout << "Fast TIGER took "
+    << convert_time(getRealTime() - begin_wallclock_time) << " (of wall-clock time) "
+    << convert_time(getCPUTime() - begin_cpu_time) << " (of CPU time)" << endl;
+
+    return rates;
+}
+
+int getPartitionIdx(vector<double> lh, int stg) {
+    if (stg == 0) { // assign to best likelihood subset
+        return (int)(std::max_element(lh.begin(), lh.end()) - lh.begin());
+    } else { // assign to subset based on probability distribution
+        double minLH = 1e9;
+        for (int i = 0; i < lh.size(); ++i) {
+            if (lh[i] != -1e9 && lh[i] < minLH) minLH = lh[i];
+        }
+        vector<double> eps;
+        for (int i = 0; i < lh.size(); ++i) {
+            if (lh[i] == - 1e9) eps.push_back(0);
+            else eps.push_back(exp(lh[i] - minLH));
+        }
+        double total = std::accumulate(eps.begin(), eps.end(), 0.0);
+        double r = random_double();
+        assert(0 <= r && r < 1);
+
+        for (int i = 0; i < eps.size(); ++i) {
+            if (r < eps[i] / total) return i;
+            r -= eps[i] / total;
+        }
+        assert(0);
+    } 
+}
+
+vector<double> calcLH(Params& params, Alignment* aln, std::string model, std::string treefile, std::string prefixPath) {    
+    std::iostream null_stream(nullptr);
+    std::streambuf* cout_buffer = std::cout.rdbuf(null_stream.rdbuf());
+
+    std::string filename = prefixPath + aln->name;
+    aln->printAlignment(IN_PHYLIP, filename.c_str());
+
+    char* argv[] = {
+        "",
+        "-s", &filename[0],
+        "-m", &model[0],
+        "-t", &treefile[0],
+        "-keep-ident",
+        "-wsl",
+        "-safe", 
+        "-T", &std::to_string(params.num_threads)[0],
+        "-redo",
+        "-seed", &std::to_string(params.ran_seed)[0]
+    };
+    int argc = sizeof(argv) / sizeof(char*);
+    Params::addParams(argc, argv);
+    Checkpoint *checkpoint = new Checkpoint;
+    runPhyloAnalysis(Params::getInstance(), checkpoint);
+    Params::removeParams();
+
+    std::cout.rdbuf(cout_buffer);
+
+    std::vector<double> lh;
+    std::ifstream in(prefixPath + aln->name + ".sitelh");
+    
+    std::string line;
+    std::getline(in, line); // skip the first line
+    std::getline(in, line);
+    std::istringstream iss(line);
+    std::string tmp; iss >> tmp; // skip the first word
+    double l;
+    while (iss >> l) {
+        lh.push_back(l);
+    }
+    return lh;
+};
+
+void printPartitions(std::string filename, std::vector<std::vector<int>> sitesOfParts) {
+    int n = sitesOfParts.size();
+    ofstream out(filename);
+    out << "#nexus\nbegin sets;\n";
+    for (int i = 0; i < n; ++i) {
+        if (sitesOfParts[i].empty()) continue;
+        out << "charset " << "P" << i << " = ";
+        for (int j = 0; j < sitesOfParts[i].size(); ++j) {
+            out << sitesOfParts[i][j] + 1;
+            if (j < sitesOfParts[i].size() - 1) out << ",";
+        }
+        out << ";\n";
+    }
+    out << "end;\n";
+    out.close();
+}
+
+vector<string> getCandidateModels(Params &params, Alignment *aln, std::vector<std::vector<int>> sitesOfParts, std::string prefixPath) {
+    printPartitions(prefixPath + aln->name + ".partitions", sitesOfParts);
+    std::iostream null_stream(nullptr);
+    std::streambuf* cout_buffer = std::cout.rdbuf(null_stream.rdbuf());
+
+    aln->printAlignment(IN_PHYLIP, (prefixPath + aln->name).c_str());
+    // std::cout << "Finding the best model for " << aln->name << "..." << std::endl;
+    
+    std::string arg_s = prefixPath + aln->name;
+    std::string arg_prefix = prefixPath + aln->name;
+    std::string arg_p = prefixPath + aln->name + ".partitions";
+
+    char* argv[] = {
+        "",
+        "-s", &arg_s[0],
+        "-p", &arg_p[0],
+        "--prefix", &arg_prefix[0],
+        "-m", "MF",
+        "-keep-ident",
+        "-fast",
+        "-safe",
+        "-mset", &params.model_set[0],
+        "-T", &std::to_string(params.num_threads)[0],
+        "-redo",
+        "-seed", &std::to_string(params.ran_seed)[0]
+    };
+    int argc = sizeof(argv) / sizeof(char*);
+    Params::addParams(argc, argv);
+    Checkpoint *checkpoint = new Checkpoint;
+    runPhyloAnalysis(Params::getInstance(), checkpoint);
+    Params::removeParams();
+    std::cout.rdbuf(cout_buffer);
+
+    ifstream inp(prefixPath + aln->name + ".iqtree");
+    std::string line;
+    std::vector<std::string> models;
+    while (std::getline(inp, line)) {
+        if (line.find("Best-fit model") != std::string::npos) {
+            std::string str = line.substr(line.find(":") + 2);
+            bool isModel = 1;
+            std::string model;
+            for (int i = 0; i < str.size(); ++i) {
+                if (str[i] == ':') {
+                    assert(isModel);
+                    models.push_back(model);
+                    isModel = false;
+                    model = "";
+                } else if (str[i] == ',') {
+                    assert(!isModel);
+                    isModel = true;
+                } else if (isModel) {
+                    model += str[i];
+                }
+            }
+        }
+    }
+    for (auto &model: models) {
+        int pos = model.find("+ASC");
+        if (pos != std::string::npos) {
+            model = model.substr(0, pos) + model.substr(pos + 4);
+        }
+    }
+
+    if (params.mPartition) return models;
+    checkpoint->startStruct("matrix");
+    vector<vector<double>> matrices;
+    for (int i = 0; i < models.size(); ++i) {
+        vector<double> matrix;
+        checkpoint->getVector(std::to_string(i), matrix);
+        assert(matrix.size() == 16 || matrix.size() == 4);
+        matrices.push_back(matrix);
+    }
+
+    auto pearsonCorrelation = [&](const std::vector<double>& x, const std::vector<double>& y) {
+        assert(x.size() == y.size());
+        double x_mean = std::accumulate(x.begin(), x.end(), 0.0) / x.size();
+        double y_mean = std::accumulate(y.begin(), y.end(), 0.0) / y.size();
+
+        double covariance = 0.0;
+        double x_sq_sum = 0.0, y_sq_sum = 0.0;
+
+        for (size_t i = 0; i < x.size(); ++i) {
+            double x_diff = x[i] - x_mean;
+            double y_diff = y[i] - y_mean;
+            covariance += x_diff * y_diff;
+            x_sq_sum += x_diff * x_diff;
+            y_sq_sum += y_diff * y_diff;
+        }
+
+        covariance /= x.size();
+        double correlation = covariance / (std::sqrt(x_sq_sum / x.size()) * std::sqrt(y_sq_sum / y.size()));
+        
+        return correlation;
+    };    
+    
+    for (auto model: models) {
+        cerr << model << ' ';
+    }
+    cerr << '\n';
+
+
+    for (int i = 0; i < matrices.size(); ++i) {
+        if (models[i].empty()) continue;
+        for (int j = i + 1; j < matrices.size(); ++j) {
+            if (models[j].empty()) continue;
+            double correlation = pearsonCorrelation(matrices[i], matrices[j]);
+            if (correlation > 0.9995) {
+                models[j] = "";
+            }
+        }
+    }
+
+    for (auto model: models) {
+        cerr << model << ' ';
+    }
+    cerr << '\n';
+
+    for (int i = 0; i < models.size(); ++i) {
+        if (models[i].empty()) {
+            models.erase(models.begin() + i);
+            --i;
+        }
+    }
+
+    for (auto model: models) {
+        cerr << model << ' ';
+    }
+    cerr << '\n';
+    return models;
+};
+
+double getBIC(Params &params, Alignment* aln, std::string prefixPath) {
+    std::ifstream inp(prefixPath + aln->name + "_BIC.iqtree");
+    if (!inp) {
+        // printf("Running BIC checking for %s\n", aln->name.c_str());
+        std::iostream null_stream(nullptr);
+        std::streambuf* cout_buffer = std::cout.rdbuf(null_stream.rdbuf());
+
+        aln->printAlignment(IN_PHYLIP, (prefixPath + aln->name).c_str());
+    
+        std::string arg_s = prefixPath + aln->name;
+        std::string arg_prefix = prefixPath + aln->name + "_BIC";
+
+        char* argv[] = { 
+            "",
+            "-s", &arg_s[0],
+            "-mset", &params.model_set[0],
+            "--prefix", &arg_prefix[0],
+            "-m", "MF",
+            "-keep-ident",
+            "-fast",
+            "-T", &std::to_string(params.num_threads)[0],
+            "-safe",
+            "-redo",
+            "-seed", &std::to_string(params.ran_seed)[0]
+        };
+        int argc = sizeof(argv) / sizeof(char*);
+        Params::addParams(argc, argv);
+        Checkpoint *checkpoint = new Checkpoint;
+        runPhyloAnalysis(Params::getInstance(), checkpoint);
+        Params::removeParams();
+        inp = std::ifstream(prefixPath + aln->name + "_BIC.iqtree");
+        
+        std::cout.rdbuf(cout_buffer);
+    }
+    std::string line;
+    while (std::getline(inp, line)) {
+        if (line.find("Bayesian information criterion (BIC) score:") != std::string::npos) {
+            std::string str = line.substr(line.find(":") + 2);
+            return std::stod(str);
+        }
+    }
+    exit(0);
+}
+
+const int BOUND_LEN = 50;
+
+void runMPartition(Params &params, Alignment* aln, std::string prefixPath) {
+    std::vector<double> rates = (params.fastTIGER ? calcRateFast(aln) : calcRate(aln));
+
+    queue<std::pair<Alignment*, std::vector<int>>> alnQueue;
+    vector<int> sites;
+    for (int i = 0; i < aln->getNSite(); ++i) sites.push_back(i);
+    alnQueue.push({aln, sites});
+
+    getBIC(params, aln, prefixPath);
+
+    const std::string treefile = prefixPath + aln->name + "_BIC.treefile";
+    
+    std::vector<std::vector<int>> partitions;
+
+    while (!alnQueue.empty()) {
+        auto [aln, sites] = alnQueue.front();
+        alnQueue.pop();
+        
+        double maxRate = 0, minRate = 1;
+        
+        std::vector<double> curRates;
+        for (auto i: sites) {
+            curRates.push_back(rates[i]);
+        }
+        sort(curRates.begin(), curRates.end());
+        int idx = static_cast<int>(std::round(curRates.size() * 1.0 / 100)) - 1;
+        if (idx >= BOUND_LEN) {
+            minRate = curRates[idx];
+            maxRate = curRates[static_cast<int>(std::round(curRates.size() * 99.0 / 100)) - 1];
+        } else {
+            for (auto i: sites) {
+                maxRate = max(maxRate, rates[i]);
+                minRate = min(minRate, rates[i]);
+            }
+        }
+
+        double lowerPivot = minRate + (maxRate - minRate) / 3;
+        double upperPivot = maxRate - (maxRate - minRate) / 3;
+
+        std::vector<std::vector<int>> sitesOfParts(3);
+        for (int i = 0; i < sites.size(); ++i) {
+            if (rates[sites[i]] < lowerPivot) sitesOfParts[0].push_back(i);
+            else if (rates[sites[i]] < upperPivot) sitesOfParts[1].push_back(i);
+            else sitesOfParts[2].push_back(i);
+        }
+        
+        if (sitesOfParts[0].size() < BOUND_LEN || sitesOfParts[1].size() < BOUND_LEN || sitesOfParts[2].size() < BOUND_LEN) {
+            for (int i = 0; i < 3; ++i) {
+                sitesOfParts[i].clear();
+            }
+            for (int i = 0; i < sites.size(); ++i) {
+                if (rates[sites[i]] >= upperPivot && sitesOfParts[2].size() <= sites.size() / 3) {
+                    sitesOfParts[2].push_back(i);
+                } else if (rates[sites[i]] <= lowerPivot && sitesOfParts[0].size() <= sites.size() / 3) {
+                    sitesOfParts[0].push_back(i);
+                } else {
+                    sitesOfParts[1].push_back(i);
+                }
+            }
+        }
+
+        std::vector<std::string> models = getCandidateModels(params, aln, sitesOfParts, prefixPath);
+       
+        std::vector<double> lh[(int)models.size()];
+        sitesOfParts = std::vector<std::vector<int>>(models.size());
+        // printf("Calculating likelihood for %s\n", aln->name.c_str());
+        for (int i = 0; i < sitesOfParts.size(); ++i) 
+            lh[i] = calcLH(params, aln, models[i], treefile, prefixPath);
+        // reassign sites to subsets
+        // printf("Reassigning sites for %s\n", aln->name.c_str());
+        for (int i = 0; i < aln->getNSite(); ++i) {
+            Pattern p = aln->getPattern(i);
+            vector<double> lhs;
+            for (int j = 0; j < sitesOfParts.size(); ++j) {
+                lhs.push_back(lh[j][i]);
+            }
+
+            int idx = (p.isConst() ? getPartitionIdx(lhs, 1) : getPartitionIdx(lhs, 0));
+            sitesOfParts[idx].push_back(i);
+        }
+        vector<int> smalls;
+        for (int i = 0; i < sitesOfParts.size(); ++i) {
+            if (sitesOfParts[i].size() < BOUND_LEN) {
+                smalls.push_back(i);
+            }
+        }
+        if (sitesOfParts.size() - smalls.size() < 2) {
+            partitions.push_back(sites);
+            continue;
+        }
+        for (auto i: smalls) {
+            vector<int> others;
+            for (int j = 0; j < sitesOfParts.size(); ++j) {
+                if (j != i) {
+                    others.push_back(j);
+                }
+            }
+            for (auto j: sitesOfParts[i]) {
+                if (lh[others[0]][j] > lh[others[1]][j]) {
+                    sitesOfParts[others[0]].push_back(j);
+                } else {
+                    sitesOfParts[others[1]].push_back(j);
+                }
+            }
+            sitesOfParts[i].clear();
+        }
+        printf("Splitting partitions for %s\n", aln->name.c_str());
+        double prevBIC = getBIC(params, aln, prefixPath);
+        double curBIC = 0;
+        vector<pair<Alignment*, vector<int>>> subAlns;
+        for (int i = 0; i < sitesOfParts.size(); ++i) {
+            if (sitesOfParts[i].empty()) continue;
+            Alignment* subAln = new Alignment;
+            subAln->extractSites(aln, sitesOfParts[i]);
+            subAln->name = aln->name + "_" + std::to_string(i);
+            std::vector<int> subSites;
+            for (int j: sitesOfParts[i]) subSites.push_back(sites[j]);
+            subAlns.push_back({subAln, subSites});
+            curBIC += getBIC(params, subAln, prefixPath);
+        }
+        printf("BIC: %lf -> %lf\n", prevBIC, curBIC);
+        if (prevBIC > curBIC) {
+            for (auto [subAln, subSites]: subAlns) {
+                alnQueue.push({subAln, subSites});
+            }
+        } else {
+            partitions.push_back(sites);
+        }
+    }
+
+    printPartitions(string(params.out_prefix) + "partitions.nexus", partitions);
+}
+
+void runGPartition(Params &params, Alignment* aln, std::string prefixPath) {
+    const int numSubsets = ceil(aln->getNSite() / 100);
+        
+    std::vector<double> rates = (params.fastTIGER ? calcRateFast(aln) : calcRate(aln));
+
+    double maxRate = *max_element(rates.begin(), rates.end());
+    double minRate = *min_element(rates.begin(), rates.end());
+    
+    double lenPerSubset = (maxRate - minRate) / numSubsets;
+
+    std::vector<std::vector<int>> sitesOfParts(numSubsets);
+    for (int i = 0; i < rates.size(); ++i) {
+        int idx = -1;
+        for (int j = 0; j < numSubsets; ++j) {
+            if (rates[i] < minRate + lenPerSubset * (j + 1)) {
+                idx = j;
+                break;
+            }
+        }
+        if (idx == -1) idx = numSubsets - 1;
+        sitesOfParts[idx].push_back(i);
+    }
+    for (int i = 0; i < numSubsets; ++i) {
+        if (sitesOfParts[i].size() < BOUND_LEN) {
+            if (i < numSubsets - 1) {
+                sitesOfParts[i + 1].insert(sitesOfParts[i + 1].end(), sitesOfParts[i].begin(), sitesOfParts[i].end());
+                sitesOfParts[i].clear();
+            } else {
+                for (int j = i - 1; j >= 0; --j) {
+                    if (sitesOfParts[j].size()) {
+                        sitesOfParts[j].insert(sitesOfParts[j].end(), sitesOfParts[i].begin(), sitesOfParts[i].end());
+                        sitesOfParts[i].clear();
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    for (int i = 0; i < sitesOfParts.size(); ++i) {
+        printf("%d: %d\n", i, sitesOfParts[i].size());
+    }
+    std::vector<std::vector<int>> newSitesOfParts;
+    for (int i = 0; i < sitesOfParts.size(); ++i) {
+        if (sitesOfParts[i].size()) {
+            newSitesOfParts.push_back(sitesOfParts[i]);
+        }
+    }
+    std::swap(sitesOfParts, newSitesOfParts);
+    
+    if (sitesOfParts.size() == 1) {
+        printPartitions(string(params.out_prefix) + "partitions.nexus", sitesOfParts);
+        return;
+    }
+    
+    // find best model for each subset
+    std::vector<std::string> models = getCandidateModels(params, aln, sitesOfParts, prefixPath);
+
+    const std::string treefile = prefixPath + aln->name + ".treefile";
+    // calculate likelihood for each subset based on the best model
+    std::vector<double> lh[(int)models.size()];
+    sitesOfParts = std::vector<std::vector<int>>(models.size());
+    for (int i = 0; i < sitesOfParts.size(); ++i) 
+        lh[i] = calcLH(params, aln, models[i], treefile, prefixPath);
+    // reassign sites to subsets
+    for (int i = 0; i < aln->getNSite(); ++i) {
+        Pattern p = aln->getPattern(i);
+        vector<double> lhs;
+        for (int j = 0; j < sitesOfParts.size(); ++j) {
+            lhs.push_back(lh[j][i]);
+        }
+        int idx = (p.isConst() ? getPartitionIdx(lhs, 1) : getPartitionIdx(lhs, 0));
+        sitesOfParts[idx].push_back(i);
+    }
+
+    std::sort(sitesOfParts.begin(), sitesOfParts.end(), [](const std::vector<int>& a, const std::vector<int>& b) {
+        return a.size() > b.size();
+    });
+
+    for (int i = sitesOfParts.size() - 1; i >= 0; --i) {
+        if (sitesOfParts[i].size() >= BOUND_LEN) continue;
+        for (auto x: sitesOfParts[i]) {
+            vector<double> lhs;
+            for (int j = 0; j < sitesOfParts.size(); ++j) {
+                if (j == i || sitesOfParts[j].empty()) {
+                    lhs.push_back(- 1e9);
+                    continue;
+                }
+                lhs.push_back(lh[j][x]);
+            }
+            Pattern p = aln->getPattern(x);
+            int idx = (p.isConst() ? getPartitionIdx(lhs, 1) : getPartitionIdx(lhs, 0));
+            sitesOfParts[idx].push_back(x);
+        }
+        sitesOfParts[i].clear();
+    }
+
+    printPartitions(string(params.out_prefix) + "partitions.nexus", sitesOfParts);
+}
+
+void splitAlignment(Params &params, Alignment* aln) {
+    double begin_wallclock_time = getRealTime();
+    double begin_cpu_time = getCPUTime();
+
+    const std::string prefixPath = string(params.out_prefix) + "/tmp/";
+    if (system(("test -d " + prefixPath).c_str()) == 0) {
+        system(("rm -rf " + prefixPath).c_str());
+    }
+    system(("mkdir " + prefixPath).c_str());
+    
+    if (params.gPartition) runGPartition(params, aln, prefixPath);
+    else runMPartition(params, aln, prefixPath);
+
+    system(("rm -rf " + prefixPath).c_str());
+    
+    std::cout << "Split partitions took "
+        << convert_time(getRealTime() - begin_wallclock_time) << " (of wall-clock time) "
+        << convert_time(getCPUTime() - begin_cpu_time) << " (of CPU time)" << endl;
+}
+
 void runPhyloAnalysis(Params &params, Checkpoint *checkpoint, IQTree *&tree, Alignment *&alignment)
 {
     checkpoint->putBool("finished", false);
@@ -4504,6 +5149,8 @@ void runPhyloAnalysis(Params &params, Checkpoint *checkpoint, IQTree *&tree, Ali
         // run Arndt's plot of tree likelihoods against bootstrap alignments
 //        runBootLhTest(params, alignment, *tree);
         outError("Obsolete feature");
+    } else if (params.gPartition || params.mPartition) {
+        splitAlignment(params, alignment);
     } else if (params.num_bootstrap_samples == 0) {
     /********************************************************************************
                     THE MAIN MAXIMUM LIKELIHOOD TREE RECONSTRUCTION

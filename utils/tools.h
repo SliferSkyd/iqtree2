@@ -624,7 +624,30 @@ private:
     // make a copy of params?
     //Params (Params const&) {}; // Disable copy constructor
     //void operator=(Params const&) {}; // Disable assignment
+    static std::vector<Params*> instances;
 public:
+    static void addParams(int argc, char *argv[]);
+    static void removeParams();
+
+    /**
+     * Applying TIGER algorithm for splitting alignment
+     */
+    bool TIGER;
+
+    /**
+     * Applying fastTIGER algorithm for splitting alignment
+     */
+    bool fastTIGER;
+
+    /**
+     * Split alignment using gPartition
+     */
+    bool gPartition;
+
+    /**
+     * Split alignment using mPartition
+     */
+    bool mPartition;
 
     /**
     *  Fast and accurate optimiation for alpha and p_invar

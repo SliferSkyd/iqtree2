@@ -1016,6 +1016,8 @@ void parseArg(int argc, char *argv[], Params &params) {
     int cnt;
     progress_display::setProgressDisplay(false);
     verbose_mode = VB_MIN;
+    params.mPartition = false;
+    params.gPartition = false;
     params.tree_gen = NONE;
     params.user_file = NULL;
     params.constraint_tree_file = NULL;
@@ -1546,6 +1548,32 @@ void parseArg(int argc, char *argv[], Params &params) {
                 printCopyright(cout);
                 exit(EXIT_SUCCESS);
             }
+            if (strcmp(argv[cnt], "-mPartition") == 0 || strcmp(argv[cnt],"--mPartition") == 0) {
+                params.mPartition = true;
+                params.gPartition = false;
+                params.TIGER = true;
+                params.fastTIGER = false;
+                continue;
+            }
+            if (strcmp(argv[cnt], "-gPartition") == 0 || strcmp(argv[cnt],"--gPartition") == 0) {
+                params.mPartition = false;
+                params.gPartition = true;
+                params.TIGER = false;
+                params.fastTIGER = true;
+                continue;
+            }
+            
+            if (strcmp(argv[cnt], "-TIGER") == 0 || strcmp(argv[cnt],"--TIGER") == 0) {
+                params.TIGER = true;
+                params.fastTIGER = false;
+                continue;
+            }
+            if (strcmp(argv[cnt], "-fastTIGER") == 0 || strcmp(argv[cnt],"--fastTIGER") == 0) {
+                params.fastTIGER = true;
+                params.TIGER = false;
+                continue;
+            }
+
 			if (strcmp(argv[cnt], "-ho") == 0 || strcmp(argv[cnt], "-?") == 0) {
 				usage_iqtree(argv, false);
 				continue;
@@ -7192,11 +7220,24 @@ void trimString(string &str) {
 
 
 
+std::vector<Params*> Params::instances = {};
+
 Params& Params::getInstance() {
-    static Params instance;
-    return instance;
+    if (instances.empty()) {
+        instances.push_back(new Params());
+    }
+    return *instances.back();
 }
 
+
+void Params::addParams(int argc, char *argv[]) {
+    instances.push_back(new Params());
+    parseArg(argc, argv, *instances.back());
+}
+
+void Params::removeParams() {
+    instances.pop_back();
+}
 
 int countPhysicalCPUCores() {
     #ifdef _OPENMP
