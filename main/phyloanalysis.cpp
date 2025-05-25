@@ -4478,7 +4478,6 @@ int getPartitionIdx(vector<double> lh, int stg) {
         double total = std::accumulate(eps.begin(), eps.end(), 0.0);
         double r = random_double();
         assert(0 <= r && r < 1);
-
         for (int i = 0; i < eps.size(); ++i) {
             if (r < eps[i] / total) return i;
             r -= eps[i] / total;
@@ -4500,8 +4499,8 @@ vector<double> calcLH(Params& params, Alignment* aln, std::string model, std::st
         "-m", &model[0],
         "-t", &treefile[0],
         "-keep-ident",
-        "-wsl",
-        "-safe", 
+        "--safe",
+        "--sitelh", 
         "-T", &std::to_string(params.num_threads)[0],
         "-redo",
         "-seed", &std::to_string(params.ran_seed)[0]
@@ -4565,12 +4564,12 @@ vector<string> getCandidateModels(Params &params, Alignment *aln, std::vector<st
         "--prefix", &arg_prefix[0],
         "-m", "MF",
         "-keep-ident",
-        "-fast",
-        "-safe",
-        "-mset", &params.model_set[0],
+        "--fast",
+        "--safe",
+        "--mset", &params.model_set[0],
         "-T", &std::to_string(params.num_threads)[0],
-        "-redo",
-        "-seed", &std::to_string(params.ran_seed)[0]
+        "--redo",
+        "--seed", &std::to_string(params.ran_seed)[0]
     };
     int argc = sizeof(argv) / sizeof(char*);
     Params::addParams(argc, argv);
@@ -4692,15 +4691,15 @@ double getBIC(Params &params, Alignment* aln, std::string prefixPath) {
         char* argv[] = { 
             "",
             "-s", &arg_s[0],
-            "-mset", &params.model_set[0],
+            "--mset", &params.model_set[0],
             "--prefix", &arg_prefix[0],
             "-m", "MF",
             "-keep-ident",
-            "-fast",
+            "--fast",
             "-T", &std::to_string(params.num_threads)[0],
-            "-safe",
-            "-redo",
-            "-seed", &std::to_string(params.ran_seed)[0]
+            "--safe",
+            "--redo",
+            "--seed", &std::to_string(params.ran_seed)[0]
         };
         int argc = sizeof(argv) / sizeof(char*);
         Params::addParams(argc, argv);
@@ -4741,6 +4740,11 @@ void runMPartition(Params &params, Alignment* aln, std::string prefixPath) {
         auto [aln, sites] = alnQueue.front();
         alnQueue.pop();
         
+        if (sites.size() <= BOUND_LEN * 2) {    
+            partitions.push_back(sites);
+            continue;
+        }
+
         double maxRate = 0, minRate = 1;
         
         std::vector<double> curRates;
