@@ -4773,19 +4773,9 @@ void runMPartition(Params &params, Alignment* aln, std::string prefixPath) {
             else sitesOfParts[2].push_back(i);
         }
         
-        if (sitesOfParts[0].size() < BOUND_LEN || sitesOfParts[1].size() < BOUND_LEN || sitesOfParts[2].size() < BOUND_LEN) {
-            for (int i = 0; i < 3; ++i) {
-                sitesOfParts[i].clear();
-            }
-            for (int i = 0; i < sites.size(); ++i) {
-                if (rates[sites[i]] >= upperPivot && sitesOfParts[2].size() <= sites.size() / 3) {
-                    sitesOfParts[2].push_back(i);
-                } else if (rates[sites[i]] <= lowerPivot && sitesOfParts[0].size() <= sites.size() / 3) {
-                    sitesOfParts[0].push_back(i);
-                } else {
-                    sitesOfParts[1].push_back(i);
-                }
-            }
+        if (sitesOfParts[0].size() < 10 || sitesOfParts[1].size() < 10 || sitesOfParts[2].size() < 10) {
+            partitions.push_back(sites);
+            continue;
         }
 
         std::vector<std::string> models = getCandidateModels(params, aln, sitesOfParts, prefixPath);
