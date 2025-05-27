@@ -2086,12 +2086,46 @@ void testPartitionModel(Params &params, PhyloSuperTree* in_tree, ModelCheckpoint
     }
     bool test_merge = (params.partition_merge != MERGE_NONE) && params.partition_type != TOPO_UNLINKED && (in_tree->size() > 1);
     
+    std::vector<int> part_order;
+    if (MPIHelper::getInstance().getNumProcesses() > 1) {
+        int nprocs = MPIHelper::getInstance().getNumProcesses();
+        // enable parallel processing of partitions
+        std::priority_queue<pair<double, int> > partition_queue;
+        std::vector<IntVector> proc_partitions(nprocs);
+
+        for (int i = 0; i < MPIHelper::getInstance().getNumProcesses(); i++) {
+            partition_queue.push(make_pair(0.0, i));
+        }
+
+        // distribute partitions to processes
+        for (int i = 0; i < in_tree->size(); i++) {
+            // get the process with the least number of partitions
+            pair<double, int> p = partition_queue.top();
+            partition_queue.pop();
+            int proc_id = p.second;
+            double cost = p.first - partitionID[i].second;
+            partition_queue.push(make_pair(cost, proc_id));
+            // assign this partition to the process
+            proc_partitions[proc_id].push_back(partitionID[i].first);
+        }
+        part_order = MPIHelper::getInstance().getProcVector(proc_partitions);
+    } else {
+        // single process, just use the sorted partitionID
+        part_order.resize(in_tree->size());
+        for (int j = 0; j < in_tree->size(); j++)
+            part_order[j] = partitionID[j].first;
+    }
+
+    DoubleVector lhsums(in_tree->size(), 0.0);
+    DoubleVector dfsums(in_tree->size(), 0.0);
+    StrVector model_names(in_tree->size(), "");
+
 #ifdef _OPENMP
-    parallel_over_partitions = !params.model_test_and_tree && (in_tree->size() >= num_threads);
-#pragma omp parallel for private(i) schedule(dynamic) reduction(+: lhsum, dfsum) if(parallel_over_partitions)
+    parallel_over_partitions = !params.model_test_and_tree && (part_order.size() >= num_threads);
+#pragma omp parallel for private(i) schedule(dynamic) if(parallel_over_partitions)
 #endif
-	for (int j = 0; j < in_tree->size(); j++) {
-        i = partitionID[j].first;
+	for (int j = 0; j < part_order.size(); j++) {
+        i = part_order[j];
         PhyloTree *this_tree = in_tree->at(i);
 		// scan through models for this partition, assuming the information occurs consecutively
 		ModelCheckpoint part_model_info;
@@ -2109,8 +2143,9 @@ void testPartitionModel(Params &params, PhyloSuperTree* in_tree, ModelCheckpoint
 
 		double score = best_model.computeICScore(this_tree->getAlnNSite());
 		this_tree->aln->model_name = best_model.getName();
-		lhsum += (lhvec[i] = best_model.logl);
-		dfsum += (dfvec[i] = best_model.df);
+        model_names[i] = best_model.getName();
+		lhsums[i] = (lhvec[i] = best_model.logl);
+		dfsums[i] = (dfvec[i] = best_model.df);
         lenvec[i] = best_model.tree_len;
 
 #ifdef _OPENMP
@@ -2141,6 +2176,24 @@ void testPartitionModel(Params &params, PhyloSuperTree* in_tree, ModelCheckpoint
         }
     }
 
+    lhsums = MPIHelper::getInstance().sumProcs(lhsums);
+    dfsums = MPIHelper::getInstance().sumProcs(dfsums);
+    model_names = MPIHelper::getInstance().gatherAllStrings(model_names);
+
+    for (auto lh: lhsums) {
+        lhsum += lh;
+    }
+
+    for (auto df: dfsums) {
+        dfsum += df;
+    }
+
+    for (i = 0; i < in_tree->size(); i++) {
+        in_tree->at(i)->aln->model_name = model_names[i];
+    }
+
+    MPIHelper::getInstance().barrier();
+
     // in case ModelOMatic change the alignment
     fixPartitions(in_tree);
     
@@ -2158,15 +2211,15 @@ void testPartitionModel(Params &params, PhyloSuperTree* in_tree, ModelCheckpoint
 	}
 
     vector<set<int> > gene_sets;
-    StrVector model_names;
+    // StrVector model_names;
     StrVector greedy_model_trees;
 
     gene_sets.resize(in_tree->size());
-    model_names.resize(in_tree->size());
+    // model_names.resize(in_tree->size());
     greedy_model_trees.resize(in_tree->size());
     for (i = 0; i < gene_sets.size(); i++) {
         gene_sets[i].insert(i);
-        model_names[i] = in_tree->at(i)->aln->model_name;
+        // model_names[i] = in_tree->at(i)->aln->model_name;
         greedy_model_trees[i] = in_tree->at(i)->aln->name;
     }
 

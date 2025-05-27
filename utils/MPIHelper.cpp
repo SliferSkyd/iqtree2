@@ -205,6 +205,85 @@ void MPIHelper::gatherCheckpoint(Checkpoint *ckp) {
     }
 }
 
+DoubleVector MPIHelper::sumProcs(DoubleVector vals)
+{
+    int proc_size = vals.size();
+    DoubleVector sum_vals(proc_size);
+    MPI_Allreduce(vals.data(), sum_vals.data(), proc_size, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+    return sum_vals;
+}
+
+IntVector MPIHelper::getProcVector(const vector<IntVector> &vts)
+{
+    IntVector cnt_vt, offset_vt, flatten_vt;
+
+    if (isMaster())
+    {
+        int offset = 0;
+        for (const auto &vt : vts)
+        {
+            cnt_vt.push_back(vt.size());
+            offset_vt.push_back(offset);
+            offset += vt.size();
+            flatten_vt.insert(flatten_vt.end(), vt.begin(), vt.end());
+        }
+    }
+
+    int out_cnt;
+    // Send cnt to each process
+    MPI_Scatter(cnt_vt.data(), 1, MPI_INT, &out_cnt,
+                1, MPI_INT, PROC_MASTER, MPI_COMM_WORLD);
+
+    IntVector out_vt(out_cnt);
+    // Send real contents to each process
+    MPI_Scatterv(flatten_vt.data(), cnt_vt.data(), offset_vt.data(), MPI_INT,
+                 out_vt.data(), out_cnt, MPI_INT, PROC_MASTER, MPI_COMM_WORLD);
+    return out_vt;
+}
+
+vector<string> MPIHelper::gatherAllStrings(const vector<string> &strs)
+{
+    if (getNumProcesses() == 1) {
+        // If only one process, return the input vector directly
+        return strs;
+    }
+    vector<string> result(strs.size());
+    Checkpoint *ckp = new Checkpoint();
+    if (isWorker()) {
+        for (int i = 0; i < strs.size(); ++i) {
+            if (!strs[i].empty()) {
+                ckp->put(std::to_string(i), strs[i]);
+            }
+        }
+        sendCheckpoint(ckp, PROC_MASTER);    
+        Checkpoint *recv_ckp = new Checkpoint();
+        int src = recvCheckpoint(recv_ckp, PROC_MASTER);
+        for (const auto &entry : *recv_ckp) {
+            result[std::stoi(entry.first)] = entry.second;
+        }
+        delete recv_ckp;
+    } else {
+        // Master process gathers all strings from workers
+        for (int i = 1; i < getNumProcesses(); ++i) {
+            Checkpoint *recv_ckp = new Checkpoint();
+            int src = recvCheckpoint(recv_ckp, i);
+            for (const auto &entry : *recv_ckp) {
+                ckp->put(entry.first, entry.second);
+            }
+            delete recv_ckp;
+        }
+        for (int i = 1; i < getNumProcesses(); ++i) {
+            sendCheckpoint(ckp, i);
+        }
+        for (const auto &entry : *ckp) {
+            result[std::stoi(entry.first)] = entry.second;
+        }
+    }
+    delete ckp;
+    return result;
+}
+
+
 #endif
 
 MPIHelper::~MPIHelper() {
