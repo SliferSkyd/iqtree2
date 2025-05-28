@@ -4491,6 +4491,9 @@ vector<double> calcLH(Params& params, Alignment* aln, std::string model, std::st
     std::streambuf* cout_buffer = std::cout.rdbuf(null_stream.rdbuf());
 
     std::string filename = prefixPath + aln->name;
+    if (MPIHelper::getInstance().getNumProcesses() > 1) {
+        filename += "_proc" + std::to_string(MPIHelper::getInstance().getProcessID());
+    }
     aln->printAlignment(IN_PHYLIP, filename.c_str());
 
     char* argv[] = {
@@ -4506,15 +4509,26 @@ vector<double> calcLH(Params& params, Alignment* aln, std::string model, std::st
         "-seed", &std::to_string(params.ran_seed)[0]
     };
     int argc = sizeof(argv) / sizeof(char*);
+    int numProcesses = MPIHelper::getInstance().getNumProcesses();
+    int processID = MPIHelper::getInstance().getProcessID();
+
+    MPIHelper::getInstance().setNumProcesses(1);
+    MPIHelper::getInstance().setProcessID(0);
     Params::addParams(argc, argv);
     Checkpoint *checkpoint = new Checkpoint;
     runPhyloAnalysis(Params::getInstance(), checkpoint);
     Params::removeParams();
 
-    std::cout.rdbuf(cout_buffer);
+    MPIHelper::getInstance().setNumProcesses(numProcesses);
+    MPIHelper::getInstance().setProcessID(processID);
 
+    std::cout.rdbuf(cout_buffer);
     std::vector<double> lh;
-    std::ifstream in(prefixPath + aln->name + ".sitelh");
+    std::string outputFile = prefixPath + aln->name + ".sitelh";
+    if (MPIHelper::getInstance().getNumProcesses() > 1) {
+        outputFile = prefixPath + aln->name + "_proc" + std::to_string(MPIHelper::getInstance().getProcessID()) + ".sitelh";
+    }
+    std::ifstream in(outputFile);
     
     std::string line;
     std::getline(in, line); // skip the first line
@@ -4546,13 +4560,17 @@ void printPartitions(std::string filename, std::vector<std::vector<int>> sitesOf
 }
 
 vector<string> getCandidateModels(Params &params, Alignment *aln, std::vector<std::vector<int>> sitesOfParts, std::string prefixPath) {
-    printPartitions(prefixPath + aln->name + ".partitions", sitesOfParts);
+    if (MPIHelper::getInstance().isMaster()) 
+        printPartitions(prefixPath + aln->name + ".partitions", sitesOfParts);
+    
     std::iostream null_stream(nullptr);
     std::streambuf* cout_buffer = std::cout.rdbuf(null_stream.rdbuf());
 
-    aln->printAlignment(IN_PHYLIP, (prefixPath + aln->name).c_str());
+    if (MPIHelper::getInstance().isMaster()) 
+        aln->printAlignment(IN_PHYLIP, (prefixPath + aln->name).c_str());
     // std::cout << "Finding the best model for " << aln->name << "..." << std::endl;
-    
+    MPIHelper::getInstance().barrier();
+
     std::string arg_s = prefixPath + aln->name;
     std::string arg_prefix = prefixPath + aln->name;
     std::string arg_p = prefixPath + aln->name + ".partitions";
@@ -4577,6 +4595,8 @@ vector<string> getCandidateModels(Params &params, Alignment *aln, std::vector<st
     runPhyloAnalysis(Params::getInstance(), checkpoint);
     Params::removeParams();
     std::cout.rdbuf(cout_buffer);
+
+    MPIHelper::getInstance().barrier();
 
     ifstream inp(prefixPath + aln->name + ".iqtree");
     std::string line;
@@ -4608,7 +4628,7 @@ vector<string> getCandidateModels(Params &params, Alignment *aln, std::vector<st
         }
     }
 
-    if (params.mPartition) return models;
+    if (params.mPartition || params.gPartition) return models;
     checkpoint->startStruct("matrix");
     vector<vector<double>> matrices;
     for (int i = 0; i < models.size(); ++i) {
@@ -4900,7 +4920,8 @@ void runGPartition(Params &params, Alignment* aln, std::string prefixPath) {
     std::swap(sitesOfParts, newSitesOfParts);
     
     if (sitesOfParts.size() == 1) {
-        printPartitions(string(params.out_prefix) + "partitions.nexus", sitesOfParts);
+        if (MPIHelper::getInstance().isMaster())
+            printPartitions(string(params.out_prefix) + "partitions.nexus", sitesOfParts);
         return;
     }
     
@@ -4909,10 +4930,28 @@ void runGPartition(Params &params, Alignment* aln, std::string prefixPath) {
 
     const std::string treefile = prefixPath + aln->name + ".treefile";
     // calculate likelihood for each subset based on the best model
-    std::vector<double> lh[(int)models.size()];
+
+    std::vector<DoubleVector> lh(models.size());
     sitesOfParts = std::vector<std::vector<int>>(models.size());
-    for (int i = 0; i < sitesOfParts.size(); ++i) 
+
+    // compute likelihood for each subset in parallel
+    int blockSize = ceil((double)models.size() / MPIHelper::getInstance().getNumProcesses());
+    int startID = MPIHelper::getInstance().getProcessID() * blockSize;
+    int endID = min(startID + blockSize, (int)sitesOfParts.size());
+
+    
+    for (int i = startID; i < endID; ++i) { 
         lh[i] = calcLH(params, aln, models[i], treefile, prefixPath);
+        // printf("%d sites in subset %d with model %s\n", lh[i].size(), i, models[i].c_str());
+    }
+    printf("Process %d %d -> %d, %d\n", MPIHelper::getInstance().getProcessID(), startID, endID, models.size());
+    // gather results from all processes
+    lh = MPIHelper::getInstance().gatherAllVectors(lh);
+
+    for (int i = 0; i < lh.size(); ++i) {
+        printf("Process %d: %d sites in subset %d\n", MPIHelper::getInstance().getProcessID(), lh[i].size(), i);
+    }
+
     // reassign sites to subsets
     for (int i = 0; i < aln->getNSite(); ++i) {
         Pattern p = aln->getPattern(i);
@@ -4945,8 +4984,9 @@ void runGPartition(Params &params, Alignment* aln, std::string prefixPath) {
         }
         sitesOfParts[i].clear();
     }
-
-    printPartitions(string(params.out_prefix) + "partitions.nexus", sitesOfParts);
+    
+    if (MPIHelper::getInstance().isMaster())        
+        printPartitions(string(params.out_prefix) + "partitions.nexus", sitesOfParts);
 }
 
 void splitAlignment(Params &params, Alignment* aln) {

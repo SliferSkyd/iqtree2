@@ -241,6 +241,47 @@ IntVector MPIHelper::getProcVector(const vector<IntVector> &vts)
     return out_vt;
 }
 
+vector<DoubleVector> MPIHelper::gatherAllVectors(vector<DoubleVector> &vts)
+{
+    if (getNumProcesses() == 1) {
+        // If only one process, return the input vector directly
+        return vts;
+    }
+    vector<DoubleVector> result(vts.size());
+    Checkpoint *ckp = new Checkpoint();
+    for (int i = 0; i < vts.size(); ++i) {
+        if (!vts[i].empty()) {
+            ckp->putVector(std::to_string(i), vts[i]);
+        }
+    }
+    if (isWorker()) {
+        sendCheckpoint(ckp, PROC_MASTER);    
+        Checkpoint *recv_ckp = new Checkpoint();
+        int src = recvCheckpoint(recv_ckp, PROC_MASTER);
+        for (const auto &entry : *recv_ckp) {
+            recv_ckp->getVector(entry.first, result[std::stoi(entry.first)]);
+        }
+        delete recv_ckp;
+    } else {
+        // Master process gathers all strings from workers
+        for (int i = 1; i < getNumProcesses(); ++i) {
+            Checkpoint *recv_ckp = new Checkpoint();
+            int src = recvCheckpoint(recv_ckp, i);
+            recv_ckp->transferSubCheckpoint(ckp, "");
+            delete recv_ckp;
+        }
+        for (int i = 1; i < getNumProcesses(); ++i) {
+            sendCheckpoint(ckp, i);
+        }
+        for (const auto &entry : *ckp) {
+            ckp->getVector(entry.first, result[std::stoi(entry.first)]);
+        }
+    }
+    delete ckp;
+    return result;
+}
+
+
 vector<string> MPIHelper::gatherAllStrings(const vector<string> &strs)
 {
     if (getNumProcesses() == 1) {
@@ -249,12 +290,12 @@ vector<string> MPIHelper::gatherAllStrings(const vector<string> &strs)
     }
     vector<string> result(strs.size());
     Checkpoint *ckp = new Checkpoint();
-    if (isWorker()) {
-        for (int i = 0; i < strs.size(); ++i) {
-            if (!strs[i].empty()) {
-                ckp->put(std::to_string(i), strs[i]);
-            }
+    for (int i = 0; i < strs.size(); ++i) {
+        if (!strs[i].empty()) {
+            ckp->put(std::to_string(i), strs[i]);
         }
+    }
+    if (isWorker()) {
         sendCheckpoint(ckp, PROC_MASTER);    
         Checkpoint *recv_ckp = new Checkpoint();
         int src = recvCheckpoint(recv_ckp, PROC_MASTER);

@@ -186,6 +186,29 @@ public:
                                 4 4 4
                                 5 5 5 5 5
      */
+    vector<DoubleVector> gatherAllVectors(vector<DoubleVector> &vts);
+    
+    /**
+        wrapper for MPI_Allgatherv to gather all strings from every process to every process
+        @param strs all strings processed by current process
+        @return the vector concatenated from each process' strings
+
+        For example:
+            proc 0 (2 strs):     "hello"
+                                "world"
+            proc 1 (3 strs):     "foo"
+                                "bar"
+                                "baz"
+            proc 3 (1 strs):     "qux"
+
+        Result:
+            all proc (6 strs):   "hello"
+                                "world"
+                                "foo"
+                                "bar"
+                                "baz"
+                                "qux"
+    */
     vector<string> gatherAllStrings(const vector<string> &strs);
 #endif
 

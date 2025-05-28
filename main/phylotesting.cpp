@@ -808,14 +808,18 @@ void runModelFinder(Params &params, IQTree &iqtree, ModelCheckpoint &model_info,
     // Model already specifed, nothing to do here
     if (!empty_model_found && params.model_name.substr(0, 4) != "TEST" && params.model_name.substr(0, 2) != "MF")
         return;
-    if (MPIHelper::getInstance().getNumProcesses() > 1)
-        outError("Please use only 1 MPI process! We are currently working on the MPI parallelization of model selection.");
+    // Comment out the following line to enable MPI parallelization of model selection
+    // if (MPIHelper::getInstance().getNumProcesses() > 1)
+    //    outError("Please use only 1 MPI process! We are currently working on the MPI parallelization of model selection.");
     // TODO: check if necessary
     //        if (iqtree.isSuperTree())
     //            ((PhyloSuperTree*) &iqtree)->mapTrees();
     double cpu_time = getCPUTime();
     double real_time = getRealTime();
     model_info.setFileName((string)params.out_prefix + ".model.gz");
+    if (MPIHelper::getInstance().getNumProcesses() > 1) {
+        model_info.setFileName((string)params.out_prefix + ".proc" + to_string(MPIHelper::getInstance().getProcessID()) + ".model.gz");
+    }
     model_info.setDumpInterval(params.checkpoint_dump_interval);
     
     bool ok_model_file = false;
@@ -2068,6 +2072,8 @@ void testPartitionModel(Params &params, PhyloSuperTree* in_tree, ModelCheckpoint
 	dfvec.resize(in_tree->size());
 	lenvec.resize(in_tree->size());
 
+    ModelCheckpoint proc_model_info;
+
     // sort partition by computational cost for OpenMP effciency
     vector<pair<int,double> > partitionID;
     
@@ -2172,13 +2178,33 @@ void testPartitionModel(Params &params, PhyloSuperTree* in_tree, ModelCheckpoint
 //            }
 //            cout << endl;
             replaceModelInfo(this_tree->aln->name, model_info, part_model_info);
-            model_info.dump();
+            // replaceModelInfo(this_tree->aln->name, proc_model_info, part_model_info);
+            // model_info.dump();
+            
         }
     }
 
-    lhsums = MPIHelper::getInstance().sumProcs(lhsums);
-    dfsums = MPIHelper::getInstance().sumProcs(dfsums);
-    model_names = MPIHelper::getInstance().gatherAllStrings(model_names);
+    if (MPIHelper::getInstance().getNumProcesses() > 1) {
+        lhsums = MPIHelper::getInstance().sumProcs(lhsums);
+        dfsums = MPIHelper::getInstance().sumProcs(dfsums);
+        model_names = MPIHelper::getInstance().gatherAllStrings(model_names);
+        
+        if (MPIHelper::getInstance().isMaster()) {
+            for (int i = 1; i < MPIHelper::getInstance().getNumProcesses(); i++) {
+                // receive model information from other processes
+                ModelCheckpoint worker_model_info;
+                int worker = MPIHelper::getInstance().recvCheckpoint(&worker_model_info, i);
+                model_info.putSubCheckpoint(&worker_model_info, "");
+            }
+            for (int i = 1; i < MPIHelper::getInstance().getNumProcesses(); i++) {
+                // send model information to other processes
+                MPIHelper::getInstance().sendCheckpoint(&model_info, i);
+            }
+        } else {
+            MPIHelper::getInstance().sendCheckpoint(&model_info, PROC_MASTER);
+            MPIHelper::getInstance().recvCheckpoint(&model_info, PROC_MASTER);
+        }
+    }
 
     for (auto lh: lhsums) {
         lhsum += lh;
@@ -2188,10 +2214,10 @@ void testPartitionModel(Params &params, PhyloSuperTree* in_tree, ModelCheckpoint
         dfsum += df;
     }
 
-    for (i = 0; i < in_tree->size(); i++) {
+    for (int i = 0; i < in_tree->size(); i++) {
         in_tree->at(i)->aln->model_name = model_names[i];
     }
-
+    
     MPIHelper::getInstance().barrier();
 
     // in case ModelOMatic change the alignment
@@ -3329,6 +3355,10 @@ CandidateModel runModelSelection(Params &params, IQTree &iqtree, ModelCheckpoint
     
     // handling checkpoint file
     model_info.setFileName((string)params.out_prefix + ".model.gz");
+    if (MPIHelper::getInstance().getNumProcesses() > 1) {
+        model_info.setFileName((string)params.out_prefix + ".proc" + to_string(MPIHelper::getInstance().getProcessID()) + ".model.gz");
+    }
+
     model_info.setDumpInterval(params.checkpoint_dump_interval);
     ok_model_file = false;
     if (!params.model_test_again) {
