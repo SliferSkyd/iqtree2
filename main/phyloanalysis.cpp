@@ -3046,7 +3046,7 @@ void runTreeReconstruction(Params &params, IQTree* &iqtree) {
     pruneTaxa(params, *iqtree, pattern_lh, pruned_taxa, linked_name);
 
     MPIHelper::getInstance().barrier();
-    
+
     /***************************************** DO STOCHASTIC TREE SEARCH *******************************************/
     if (params.min_iterations > 0 && !params.tree_spr) {
         iqtree->doTreeSearch();
@@ -4491,47 +4491,76 @@ int getPartitionIdx(vector<double> lh, int stg) {
 vector<double> calcLH(Params& params, Alignment* aln, std::string model, std::string treefile, std::string prefixPath) {    
     std::iostream null_stream(nullptr);
     std::streambuf* cout_buffer = std::cout.rdbuf(null_stream.rdbuf());
+    std::string outputFile;
 
-    std::string filename = prefixPath + aln->name;
-    if (MPIHelper::getInstance().getNumProcesses() > 1) {
-        filename += "_proc" + std::to_string(MPIHelper::getInstance().getProcessID());
+    if (params.gPartition) {
+        std::string filename = prefixPath + aln->name;
+        if (MPIHelper::getInstance().getNumProcesses() > 1) {
+            filename += "_proc" + std::to_string(MPIHelper::getInstance().getProcessID());
+        }
+        aln->printAlignment(IN_PHYLIP, filename.c_str());
+
+        char* argv[] = {
+            "",
+            "-s", &filename[0],
+            "-m", &model[0],
+            "-t", &treefile[0],
+            "-keep-ident",
+            "--safe",
+            "--sitelh", 
+            "-T", &std::to_string(params.num_threads)[0],
+            "-redo",
+            "-seed", &std::to_string(params.ran_seed)[0]
+        };
+        int argc = sizeof(argv) / sizeof(char*);
+        int numProcesses = MPIHelper::getInstance().getNumProcesses();
+        int processID = MPIHelper::getInstance().getProcessID();
+
+        MPIHelper::getInstance().setNumProcesses(1);
+        MPIHelper::getInstance().setProcessID(0);
+        Params::addParams(argc, argv);
+        Checkpoint *checkpoint = new Checkpoint;
+        runPhyloAnalysis(Params::getInstance(), checkpoint);
+        Params::removeParams();
+
+        MPIHelper::getInstance().setNumProcesses(numProcesses);
+        MPIHelper::getInstance().setProcessID(processID);
+
+        outputFile = prefixPath + aln->name + ".sitelh";
+        if (MPIHelper::getInstance().getNumProcesses() > 1) {
+            outputFile = prefixPath + aln->name + "_proc" + std::to_string(MPIHelper::getInstance().getProcessID()) + ".sitelh";
+        }
+    } else {
+        std::string filename = prefixPath + aln->name;
+        aln->printAlignment(IN_PHYLIP, filename.c_str());
+
+        char* argv[] = {
+            "",
+            "-s", &filename[0],
+            "-m", &model[0],
+            "-t", &treefile[0],
+            "-keep-ident",
+            "--safe",
+            "--sitelh", 
+            "-T", &std::to_string(params.num_threads)[0],
+            "-redo",
+            "--consistent-ts",
+            "-seed", &std::to_string(params.ran_seed)[0]
+        };
+        int argc = sizeof(argv) / sizeof(char*);
+        Params::addParams(argc, argv);
+        Checkpoint *checkpoint = new Checkpoint;
+        runPhyloAnalysis(Params::getInstance(), checkpoint);
+        Params::removeParams();
+
+        outputFile = prefixPath + aln->name + ".sitelh";
     }
-    aln->printAlignment(IN_PHYLIP, filename.c_str());
-
-    char* argv[] = {
-        "",
-        "-s", &filename[0],
-        "-m", &model[0],
-        "-t", &treefile[0],
-        "-keep-ident",
-        "--safe",
-        "--sitelh", 
-        "-T", &std::to_string(params.num_threads)[0],
-        "-redo",
-        "-seed", &std::to_string(params.ran_seed)[0]
-    };
-    int argc = sizeof(argv) / sizeof(char*);
-    int numProcesses = MPIHelper::getInstance().getNumProcesses();
-    int processID = MPIHelper::getInstance().getProcessID();
-
-    MPIHelper::getInstance().setNumProcesses(1);
-    MPIHelper::getInstance().setProcessID(0);
-    Params::addParams(argc, argv);
-    Checkpoint *checkpoint = new Checkpoint;
-    runPhyloAnalysis(Params::getInstance(), checkpoint);
-    Params::removeParams();
-
-    MPIHelper::getInstance().setNumProcesses(numProcesses);
-    MPIHelper::getInstance().setProcessID(processID);
-
-    std::cout.rdbuf(cout_buffer);
-    std::vector<double> lh;
-    std::string outputFile = prefixPath + aln->name + ".sitelh";
-    if (MPIHelper::getInstance().getNumProcesses() > 1) {
-        outputFile = prefixPath + aln->name + "_proc" + std::to_string(MPIHelper::getInstance().getProcessID()) + ".sitelh";
-    }
-    std::ifstream in(outputFile);
     
+    std::cout.rdbuf(cout_buffer);
+    
+    std::ifstream in(outputFile);
+    std::vector<double> lh;
+        
     std::string line;
     std::getline(in, line); // skip the first line
     std::getline(in, line);
@@ -4576,23 +4605,38 @@ vector<string> getCandidateModels(Params &params, Alignment *aln, std::vector<st
     std::string arg_s = prefixPath + aln->name;
     std::string arg_prefix = prefixPath + aln->name;
     std::string arg_p = prefixPath + aln->name + ".partitions";
+    
+    std::vector<std::string> args;
 
-    char* argv[] = {
-        "",
-        "-s", &arg_s[0],
-        "-p", &arg_p[0],
-        "--prefix", &arg_prefix[0],
-        "-m", "MF",
-        "-keep-ident",
-        "--fast",
-        "--safe",
-        "--mset", &params.model_set[0],
-        "-T", &std::to_string(params.num_threads)[0],
-        "--redo",
-        "--seed", &std::to_string(params.ran_seed)[0]
-    };
-    int argc = sizeof(argv) / sizeof(char*);
-    Params::addParams(argc, argv);
+    args.push_back("");
+    args.push_back("-s");         args.push_back(arg_s);
+    args.push_back("-p");         args.push_back(arg_p);
+    args.push_back("--prefix");   args.push_back(arg_prefix);
+    args.push_back("-m");         args.push_back("MF");
+    args.push_back("-keep-ident");
+    args.push_back("--fast");
+    args.push_back("--safe");
+
+    if (params.mPartition && MPIHelper::getInstance().getNumProcesses() > 1) {
+        args.push_back("--mpi-model");
+    }
+
+    args.push_back("--mset");     args.push_back(params.model_set);
+    args.push_back("-T");         args.push_back(std::to_string(params.num_threads));
+    args.push_back("--redo");
+    args.push_back("--seed");     args.push_back(std::to_string(params.ran_seed));
+
+    // Convert to char* array
+    std::vector<char*> argv;
+    for (auto& arg : args) {
+        argv.push_back(&arg[0]);  // Use .data() or &arg[0] to get char*
+    }
+
+    // Now you can pass argv.data() and argv.size() to your function.
+    int argc = argv.size();
+    char** argv_raw = argv.data();
+
+    Params::addParams(argc, argv_raw);
     Checkpoint *checkpoint = new Checkpoint;
     runPhyloAnalysis(Params::getInstance(), checkpoint);
     Params::removeParams();
@@ -4721,6 +4765,7 @@ double getBIC(Params &params, Alignment* aln, std::string prefixPath) {
             "-T", &std::to_string(params.num_threads)[0],
             "--safe",
             "--redo",
+            "--consistent-ts",
             "--seed", &std::to_string(params.ran_seed)[0]
         };
         int argc = sizeof(argv) / sizeof(char*);

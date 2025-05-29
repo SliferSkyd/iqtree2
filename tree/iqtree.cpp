@@ -2196,7 +2196,7 @@ string IQTree::optimizeBranches(int maxTraversal) {
 double IQTree::doTreeSearch() {
     double cputime_init_ufboot_start = getCPUTime();
     double realtime_init_ufboot_start = getRealTime();
-    
+
     if (params->numInitTrees > 1) {
         cout << "--------------------------------------------------------------------" << endl;
         cout << "|             INITIALIZING CANDIDATE TREE SET                      |" << endl;
@@ -2727,7 +2727,7 @@ void IQTree::refineBootTrees() {
     ModelsBlock *models_block = readModelsDefinition(*params);
     
 	// do bootstrap analysis
-	for (int sample = sample_start; sample < sample_end.size(); sample++) {
+	for (int sample = sample_start; sample < sample_end; sample++) {
         // create bootstrap alignment
         Alignment* bootstrap_alignment;
         if (aln->isSuperAlignment())
@@ -4462,7 +4462,7 @@ void IQTree::syncCandidateTrees(int nTrees, bool updateStopRule) {
 #endif
 }
 
-void IQTree::syncCurrentTree() {
+bool IQTree::syncCurrentTree() {
     if (MPIHelper::getInstance().getNumProcesses() == 1)
         return false;
 #ifdef _IQTREE_MPI
