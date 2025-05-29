@@ -697,7 +697,7 @@ public:
         @param curTree current tree
 
     */
-    void syncCurrentTree();
+    bool syncCurrentTree();
 
     /**
         MPI: Master sends stop message to all workers
@@ -775,10 +775,10 @@ public:
     vector<BootValType* > boot_samples;
 
     /** starting sample for UFBoot, used for MPI */
-    int sample_start;
+    int sample_start = 0;
 
     /** end sample for UFBoot, used for MPI */
-    int sample_end;
+    int sample_end = 0;
 
     /** newick string of corresponding bootstrap trees */
     StrVector boot_trees;
@@ -877,6 +877,8 @@ protected:
 
     // true if best candidate tree is changed
     bool bestcandidate_changed;
+
+    int syncWorkers;
 
     /**
             number of IQPNNI iterations

@@ -3045,6 +3045,8 @@ void runTreeReconstruction(Params &params, IQTree* &iqtree) {
     // prune stable taxa
     pruneTaxa(params, *iqtree, pattern_lh, pruned_taxa, linked_name);
 
+    MPIHelper::getInstance().barrier();
+    
     /***************************************** DO STOCHASTIC TREE SEARCH *******************************************/
     if (params.min_iterations > 0 && !params.tree_spr) {
         iqtree->doTreeSearch();
@@ -4939,18 +4941,12 @@ void runGPartition(Params &params, Alignment* aln, std::string prefixPath) {
     int startID = MPIHelper::getInstance().getProcessID() * blockSize;
     int endID = min(startID + blockSize, (int)sitesOfParts.size());
 
-    
     for (int i = startID; i < endID; ++i) { 
         lh[i] = calcLH(params, aln, models[i], treefile, prefixPath);
-        // printf("%d sites in subset %d with model %s\n", lh[i].size(), i, models[i].c_str());
     }
-    printf("Process %d %d -> %d, %d\n", MPIHelper::getInstance().getProcessID(), startID, endID, models.size());
+    
     // gather results from all processes
     lh = MPIHelper::getInstance().gatherAllVectors(lh);
-
-    for (int i = 0; i < lh.size(); ++i) {
-        printf("Process %d: %d sites in subset %d\n", MPIHelper::getInstance().getProcessID(), lh[i].size(), i);
-    }
 
     // reassign sites to subsets
     for (int i = 0; i < aln->getNSite(); ++i) {
