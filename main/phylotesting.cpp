@@ -2106,135 +2106,192 @@ void testPartitionModel(Params &params, PhyloSuperTree* in_tree, ModelCheckpoint
         brlen_type = BRLEN_OPTIMIZE;
     }
     bool test_merge = (params.partition_merge != MERGE_NONE) && params.partition_type != TOPO_UNLINKED && (in_tree->size() > 1);
-    
-    std::vector<int> part_order;
-    if (MPIHelper::getInstance().getNumProcesses() > 1) {
-        int nprocs = MPIHelper::getInstance().getNumProcesses();
-        // enable parallel processing of partitions
-        std::priority_queue<pair<double, int> > partition_queue;
-        std::vector<IntVector> proc_partitions(nprocs);
-
-        for (int i = 0; i < MPIHelper::getInstance().getNumProcesses(); i++) {
-            partition_queue.push(make_pair(0.0, i));
-        }
-
-        // distribute partitions to processes
-        for (int i = 0; i < in_tree->size(); i++) {
-            // get the process with the least number of partitions
-            pair<double, int> p = partition_queue.top();
-            partition_queue.pop();
-            int proc_id = p.second;
-            double cost = p.first - partitionID[i].second;
-            partition_queue.push(make_pair(cost, proc_id));
-            // assign this partition to the process
-            proc_partitions[proc_id].push_back(partitionID[i].first);
-        }
-        part_order = MPIHelper::getInstance().getProcVector(proc_partitions);
-    } else {
-        // single process, just use the sorted partitionID
-        part_order.resize(in_tree->size());
-        for (int j = 0; j < in_tree->size(); j++)
-            part_order[j] = partitionID[j].first;
-    }
-
-    DoubleVector lhsums(in_tree->size(), 0.0);
-    DoubleVector dfsums(in_tree->size(), 0.0);
     StrVector model_names(in_tree->size(), "");
 
+    if (params.mpi_by_model) {
 #ifdef _OPENMP
-    parallel_over_partitions = !params.model_test_and_tree && (part_order.size() >= num_threads);
-#pragma omp parallel for private(i) schedule(dynamic) if(parallel_over_partitions)
+        parallel_over_partitions = !params.model_test_and_tree && (in_tree->size() >= num_threads);
+#pragma omp parallel for private(i) schedule(dynamic) reduction(+: lhsum, dfsum) if(parallel_over_partitions)
 #endif
-	for (int j = 0; j < part_order.size(); j++) {
-        i = part_order[j];
-        PhyloTree *this_tree = in_tree->at(i);
-		// scan through models for this partition, assuming the information occurs consecutively
-		ModelCheckpoint part_model_info;
-		extractModelInfo(this_tree->aln->name, model_info, part_model_info);
-		// do the computation
-        string part_model_name;
-        if (params.model_name.empty())
-            part_model_name = this_tree->aln->model_name;
-        CandidateModel best_model;
-		best_model = CandidateModelSet().test(params, this_tree, part_model_info, models_block,
-            (parallel_over_partitions ? 1 : num_threads), brlen_type, this_tree->aln->name, part_model_name, test_merge);
-
-        bool check = (best_model.restoreCheckpoint(&part_model_info));
-        ASSERT(check);
-
-		double score = best_model.computeICScore(this_tree->getAlnNSite());
-		this_tree->aln->model_name = best_model.getName();
-        model_names[i] = best_model.getName();
-		lhsums[i] = (lhvec[i] = best_model.logl);
-		dfsums[i] = (dfvec[i] = best_model.df);
-        lenvec[i] = best_model.tree_len;
-
-#ifdef _OPENMP
-#pragma omp critical
-#endif
-        {
-            num_model++;
-//            cout.width(4);
-//            cout << right << num_model << " ";
-//            cout.width(12);
-//            cout << left << best_model.getName() << " ";
-//            cout.width(11);
-//            cout << score << " ";
-//            cout.width(11);
-//            cout << best_model.tree_len << " ";
-//            cout << this_tree->aln->name;
-//            if (num_model >= 10) {
-//                double remain_time = (total_num_model-num_model)*(getRealTime()-start_time)/num_model;
-//                double finish_percent = (double) num_model * 100.0 / total_num_model;
-//                cout << "Finished subset " << num_model << "/" << total_num_model << "\t" << finish_percent << " percent done";
-//                cout << "\t" << convert_time(getRealTime()-start_time) << " ("
-//                    << convert_time(remain_time) << " left)\r";
-//                cout << flush;
-//            }
-//            cout << endl;
-            replaceModelInfo(this_tree->aln->name, model_info, part_model_info);
-            // replaceModelInfo(this_tree->aln->name, proc_model_info, part_model_info);
-            // model_info.dump();
+        for (int j = 0; j < in_tree->size(); j++) {
+            i = partitionID[j].first;
+            PhyloTree *this_tree = in_tree->at(i);
+            // scan through models for this partition, assuming the information occurs consecutively
+            ModelCheckpoint part_model_info;
+            extractModelInfo(this_tree->aln->name, model_info, part_model_info);
+            // do the computation
+            string part_model_name;
+            if (params.model_name.empty())
+                part_model_name = this_tree->aln->model_name;
+            CandidateModel best_model;
             
-        }
-    }
+            best_model = CandidateModelSet().evaluateMPI(params, this_tree, part_model_info, models_block,
+                (parallel_over_partitions ? 1 : num_threads), brlen_type, part_model_name, test_merge);
 
-    if (MPIHelper::getInstance().getNumProcesses() > 1) {
-        lhsums = MPIHelper::getInstance().sumProcs(lhsums);
-        dfsums = MPIHelper::getInstance().sumProcs(dfsums);
-        model_names = MPIHelper::getInstance().gatherAllStrings(model_names);
-        
-        if (MPIHelper::getInstance().isMaster()) {
-            for (int i = 1; i < MPIHelper::getInstance().getNumProcesses(); i++) {
-                // receive model information from other processes
-                ModelCheckpoint worker_model_info;
-                int worker = MPIHelper::getInstance().recvCheckpoint(&worker_model_info, i);
-                model_info.putSubCheckpoint(&worker_model_info, "");
+            bool check = (best_model.restoreCheckpoint(&part_model_info));
+            ASSERT(check);
+
+            double score = best_model.computeICScore(this_tree->getAlnNSite());
+            this_tree->aln->model_name = best_model.getName();
+            lhsum += (lhvec[i] = best_model.logl);
+            dfsum += (dfvec[i] = best_model.df);
+            lenvec[i] = best_model.tree_len;
+
+    #ifdef _OPENMP
+    #pragma omp critical
+    #endif
+            {
+                num_model++;
+    //            cout.width(4);
+    //            cout << right << num_model << " ";
+    //            cout.width(12);
+    //            cout << left << best_model.getName() << " ";
+    //            cout.width(11);
+    //            cout << score << " ";
+    //            cout.width(11);
+    //            cout << best_model.tree_len << " ";
+    //            cout << this_tree->aln->name;
+    //            if (num_model >= 10) {
+    //                double remain_time = (total_num_model-num_model)*(getRealTime()-start_time)/num_model;
+    //                double finish_percent = (double) num_model * 100.0 / total_num_model;
+    //                cout << "Finished subset " << num_model << "/" << total_num_model << "\t" << finish_percent << " percent done";
+    //                cout << "\t" << convert_time(getRealTime()-start_time) << " ("
+    //                    << convert_time(remain_time) << " left)\r";
+    //                cout << flush;
+    //            }
+    //            cout << endl;
+                replaceModelInfo(this_tree->aln->name, model_info, part_model_info);
+                model_info.dump();
             }
-            for (int i = 1; i < MPIHelper::getInstance().getNumProcesses(); i++) {
-                // send model information to other processes
-                MPIHelper::getInstance().sendCheckpoint(&model_info, i);
+        }
+    } else {
+        std::vector<int> part_order;
+        if (MPIHelper::getInstance().getNumProcesses() > 1) {
+            int nprocs = MPIHelper::getInstance().getNumProcesses();
+            // enable parallel processing of partitions
+            std::priority_queue<pair<double, int> > partition_queue;
+            std::vector<IntVector> proc_partitions(nprocs);
+
+            for (int i = 0; i < MPIHelper::getInstance().getNumProcesses(); i++) {
+                partition_queue.push(make_pair(0.0, i));
             }
+
+            // distribute partitions to processes
+            for (int i = 0; i < in_tree->size(); i++) {
+                // get the process with the least number of partitions
+                pair<double, int> p = partition_queue.top();
+                partition_queue.pop();
+                int proc_id = p.second;
+                double cost = p.first - partitionID[i].second;
+                partition_queue.push(make_pair(cost, proc_id));
+                // assign this partition to the process
+                proc_partitions[proc_id].push_back(partitionID[i].first);
+            }
+            part_order = MPIHelper::getInstance().getProcVector(proc_partitions);
         } else {
-            MPIHelper::getInstance().sendCheckpoint(&model_info, PROC_MASTER);
-            MPIHelper::getInstance().recvCheckpoint(&model_info, PROC_MASTER);
+            // single process, just use the sorted partitionID
+            part_order.resize(in_tree->size());
+            for (int j = 0; j < in_tree->size(); j++)
+                part_order[j] = partitionID[j].first;
         }
-    }
 
-    for (auto lh: lhsums) {
-        lhsum += lh;
-    }
+        DoubleVector lhsums(in_tree->size(), 0.0);
+        DoubleVector dfsums(in_tree->size(), 0.0);
+        
+    #ifdef _OPENMP
+        parallel_over_partitions = !params.model_test_and_tree && (part_order.size() >= num_threads);
+    #pragma omp parallel for private(i) schedule(dynamic) if(parallel_over_partitions)
+    #endif
+        for (int j = 0; j < part_order.size(); j++) {
+            i = part_order[j];
+            PhyloTree *this_tree = in_tree->at(i);
+            // scan through models for this partition, assuming the information occurs consecutively
+            ModelCheckpoint part_model_info;
+            extractModelInfo(this_tree->aln->name, model_info, part_model_info);
+            // do the computation
+            string part_model_name;
+            if (params.model_name.empty())
+                part_model_name = this_tree->aln->model_name;
+            CandidateModel best_model;
+            best_model = CandidateModelSet().test(params, this_tree, part_model_info, models_block,
+                (parallel_over_partitions ? 1 : num_threads), brlen_type, this_tree->aln->name, part_model_name, test_merge);
 
-    for (auto df: dfsums) {
-        dfsum += df;
-    }
+            bool check = (best_model.restoreCheckpoint(&part_model_info));
+            ASSERT(check);
 
-    for (int i = 0; i < in_tree->size(); i++) {
-        in_tree->at(i)->aln->model_name = model_names[i];
-    }
-    
-    MPIHelper::getInstance().barrier();
+            double score = best_model.computeICScore(this_tree->getAlnNSite());
+            this_tree->aln->model_name = best_model.getName();
+            model_names[i] = best_model.getName();
+            lhsums[i] = (lhvec[i] = best_model.logl);
+            dfsums[i] = (dfvec[i] = best_model.df);
+            lenvec[i] = best_model.tree_len;
 
+    #ifdef _OPENMP
+    #pragma omp critical
+    #endif
+            {
+                num_model++;
+    //            cout.width(4);
+    //            cout << right << num_model << " ";
+    //            cout.width(12);
+    //            cout << left << best_model.getName() << " ";
+    //            cout.width(11);
+    //            cout << score << " ";
+    //            cout.width(11);
+    //            cout << best_model.tree_len << " ";
+    //            cout << this_tree->aln->name;
+    //            if (num_model >= 10) {
+    //                double remain_time = (total_num_model-num_model)*(getRealTime()-start_time)/num_model;
+    //                double finish_percent = (double) num_model * 100.0 / total_num_model;
+    //                cout << "Finished subset " << num_model << "/" << total_num_model << "\t" << finish_percent << " percent done";
+    //                cout << "\t" << convert_time(getRealTime()-start_time) << " ("
+    //                    << convert_time(remain_time) << " left)\r";
+    //                cout << flush;
+    //            }
+    //            cout << endl;
+                replaceModelInfo(this_tree->aln->name, model_info, part_model_info);
+                // replaceModelInfo(this_tree->aln->name, proc_model_info, part_model_info);
+                // model_info.dump();
+                
+            }
+        }
+
+        if (MPIHelper::getInstance().getNumProcesses() > 1) {
+            lhsums = MPIHelper::getInstance().sumProcs(lhsums);
+            dfsums = MPIHelper::getInstance().sumProcs(dfsums);
+            model_names = MPIHelper::getInstance().gatherAllStrings(model_names);
+            
+            if (MPIHelper::getInstance().isMaster()) {
+                for (int i = 1; i < MPIHelper::getInstance().getNumProcesses(); i++) {
+                    // receive model information from other processes
+                    ModelCheckpoint worker_model_info;
+                    int worker = MPIHelper::getInstance().recvCheckpoint(&worker_model_info, i);
+                    model_info.putSubCheckpoint(&worker_model_info, "");
+                }
+                for (int i = 1; i < MPIHelper::getInstance().getNumProcesses(); i++) {
+                    // send model information to other processes
+                    MPIHelper::getInstance().sendCheckpoint(&model_info, i);
+                }
+            } else {
+                MPIHelper::getInstance().sendCheckpoint(&model_info, PROC_MASTER);
+                MPIHelper::getInstance().recvCheckpoint(&model_info, PROC_MASTER);
+            }
+        }
+
+        for (auto lh: lhsums) {
+            lhsum += lh;
+        }
+
+        for (auto df: dfsums) {
+            dfsum += df;
+        }
+
+        for (int i = 0; i < in_tree->size(); i++) {
+            in_tree->at(i)->aln->model_name = model_names[i];
+        }
+        
+        MPIHelper::getInstance().barrier();
+    }
     // in case ModelOMatic change the alignment
     fixPartitions(in_tree);
     
@@ -2256,11 +2313,11 @@ void testPartitionModel(Params &params, PhyloSuperTree* in_tree, ModelCheckpoint
     StrVector greedy_model_trees;
 
     gene_sets.resize(in_tree->size());
-    // model_names.resize(in_tree->size());
+    model_names.resize(in_tree->size());
     greedy_model_trees.resize(in_tree->size());
     for (i = 0; i < gene_sets.size(); i++) {
         gene_sets[i].insert(i);
-        // model_names[i] = in_tree->at(i)->aln->model_name;
+        model_names[i] = in_tree->at(i)->aln->model_name;
         greedy_model_trees[i] = in_tree->at(i)->aln->name;
     }
 
@@ -2659,8 +2716,6 @@ void CandidateModelSet::filterRatesMPI(int finished_model) {
         if (getScore(model) <= ok_score) {
             string rate_name = at(model).orig_rate_name;
             ok_rates.insert(rate_name);
-
-            printf("Process %d, Rate %s\n", MPIHelper::getInstance().getProcessID(), rate_name.c_str());
         }
     }
     for (model = finished_model+1; model < size(); model++)
@@ -2960,7 +3015,7 @@ CandidateModel CandidateModelSet::test(Params &params, PhyloTree* in_tree, Model
         checkpoint->dump();
 
 
-		if (set_name == "") {
+		if (true || set_name == "") {
             cout.width(3);
             cout << right << model+1 << "  ";
             cout.width(13);
@@ -3384,7 +3439,7 @@ CandidateModel CandidateModelSet::evaluateMPI(Params &params, PhyloTree* in_tree
             string tree_string;
 
             // main call to estimate model parameters
-            double cur = getRealTime();
+            // double cur = getRealTime();
             tree_string = at(model).evaluate(params, model_info, out_model_info,
                                             models_block, num_threads, brlen_type);
             // printf("Model %ld evaluated in %f seconds by process %d\n", model + 1, getRealTime() - cur, MPIHelper::getInstance().getProcessID());
@@ -3397,22 +3452,20 @@ CandidateModel CandidateModelSet::evaluateMPI(Params &params, PhyloTree* in_tree
             }
 
             MPIHelper::getInstance().models->set_shared_memory(model, at(model).getScore());
+            model_info.putSubCheckpoint(&out_model_info, "");
 
-            if (at(model).getScore() < best_score) {
-                model_info.putSubCheckpoint(&out_model_info, "");
+            if (model > rate_block) {
+                MPIHelper::getInstance().models->lock();
+                // Dump checkpoint to file
+                string checkpointFile = params.out_prefix;
+                checkpointFile += ".temp.ckp.gz";
 
-                if (model > rate_block) {
-                    MPIHelper::getInstance().models->lock();
-                    // Dump checkpoint to file
-                    string checkpointFile = params.out_prefix;
-                    checkpointFile += ".temp.ckp.gz";
+                ofstream outCheckpoint(checkpointFile.c_str());
+                model_info.dump(outCheckpoint);
 
-                    ofstream outCheckpoint(checkpointFile.c_str());
-                    model_info.dump(outCheckpoint);
-
-                    MPIHelper::getInstance().models->unlock();
-                }
+                MPIHelper::getInstance().models->unlock();
             }
+            
 
             // Set flag
             at(model).setFlag(MF_DONE);
@@ -3485,8 +3538,10 @@ CandidateModel CandidateModelSet::evaluateMPI(Params &params, PhyloTree* in_tree
             checkpoint->clear();
         }    
         for (int model = 0; model < num_models; ++model)
-            if (at(model).getScore() != DBL_MAX)
+            if (at(model).getScore() != DBL_MAX) {
                 at(model).setFlag(MF_DONE);
+                at(model).saveCheckpoint(&model_info);
+            }    
     };
 
     if (MPIHelper::getInstance().isMaster()) {
@@ -3501,10 +3556,11 @@ CandidateModel CandidateModelSet::evaluateMPI(Params &params, PhyloTree* in_tree
     }
     merge();
 
+
     MPIHelper::getInstance().barrier();
 
     filterRatesMPI(rate_block);
-    MPIHelper::getInstance().models->set_shared_memory(num_models, rate_block);
+    MPIHelper::getInstance().models->set_shared_memory(num_models, rate_block + 1);
 
     MPIHelper::getInstance().barrier();
 
@@ -3613,7 +3669,6 @@ CandidateModel CandidateModelSet::evaluateMPI(Params &params, PhyloTree* in_tree
         delete prot_aln;
 
     remove(checkpointFile.c_str());
-
     return at(best_model);
 }
 

@@ -213,6 +213,11 @@ public:
     vector<DoubleVector> gatherAllVectors(vector<DoubleVector> &vts);
     
     /**
+     *  broadcast vectors from Master to all Workers
+     */
+    vector<IntVector> broadcastVectors(vector<IntVector> &vts);
+    
+    /**
         wrapper for MPI_Allgatherv to gather all strings from every process to every process
         @param strs all strings processed by current process
         @return the vector concatenated from each process' strings

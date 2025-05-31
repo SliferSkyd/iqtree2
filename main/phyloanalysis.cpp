@@ -4532,8 +4532,11 @@ vector<double> calcLH(Params& params, Alignment* aln, std::string model, std::st
         }
     } else {
         std::string filename = prefixPath + aln->name;
-        aln->printAlignment(IN_PHYLIP, filename.c_str());
+        if (MPIHelper::getInstance().isMaster()) {
+            aln->printAlignment(IN_PHYLIP, filename.c_str());
+        }
 
+        MPIHelper::getInstance().barrier();
         char* argv[] = {
             "",
             "-s", &filename[0],
@@ -4553,11 +4556,13 @@ vector<double> calcLH(Params& params, Alignment* aln, std::string model, std::st
         runPhyloAnalysis(Params::getInstance(), checkpoint);
         Params::removeParams();
 
+        MPIHelper::getInstance().barrier();
+
         outputFile = prefixPath + aln->name + ".sitelh";
     }
     
     std::cout.rdbuf(cout_buffer);
-    
+
     std::ifstream in(outputFile);
     std::vector<double> lh;
         
@@ -4599,7 +4604,7 @@ vector<string> getCandidateModels(Params &params, Alignment *aln, std::vector<st
 
     if (MPIHelper::getInstance().isMaster()) 
         aln->printAlignment(IN_PHYLIP, (prefixPath + aln->name).c_str());
-    // std::cout << "Finding the best model for " << aln->name << "..." << std::endl;
+    
     MPIHelper::getInstance().barrier();
 
     std::string arg_s = prefixPath + aln->name;
@@ -4626,13 +4631,11 @@ vector<string> getCandidateModels(Params &params, Alignment *aln, std::vector<st
     args.push_back("--redo");
     args.push_back("--seed");     args.push_back(std::to_string(params.ran_seed));
 
-    // Convert to char* array
     std::vector<char*> argv;
     for (auto& arg : args) {
-        argv.push_back(&arg[0]);  // Use .data() or &arg[0] to get char*
+        argv.push_back(&arg[0]);
     }
 
-    // Now you can pass argv.data() and argv.size() to your function.
     int argc = argv.size();
     char** argv_raw = argv.data();
 
@@ -4641,7 +4644,7 @@ vector<string> getCandidateModels(Params &params, Alignment *aln, std::vector<st
     runPhyloAnalysis(Params::getInstance(), checkpoint);
     Params::removeParams();
     std::cout.rdbuf(cout_buffer);
-
+    
     MPIHelper::getInstance().barrier();
 
     ifstream inp(prefixPath + aln->name + ".iqtree");
@@ -4745,12 +4748,14 @@ vector<string> getCandidateModels(Params &params, Alignment *aln, std::vector<st
 double getBIC(Params &params, Alignment* aln, std::string prefixPath) {
     std::ifstream inp(prefixPath + aln->name + "_BIC.iqtree");
     if (!inp) {
-        // printf("Running BIC checking for %s\n", aln->name.c_str());
         std::iostream null_stream(nullptr);
         std::streambuf* cout_buffer = std::cout.rdbuf(null_stream.rdbuf());
 
-        aln->printAlignment(IN_PHYLIP, (prefixPath + aln->name).c_str());
+        if (MPIHelper::getInstance().isMaster()) 
+            aln->printAlignment(IN_PHYLIP, (prefixPath + aln->name).c_str());
     
+        MPIHelper::getInstance().barrier();
+
         std::string arg_s = prefixPath + aln->name;
         std::string arg_prefix = prefixPath + aln->name + "_BIC";
 
@@ -4773,6 +4778,8 @@ double getBIC(Params &params, Alignment* aln, std::string prefixPath) {
         Checkpoint *checkpoint = new Checkpoint;
         runPhyloAnalysis(Params::getInstance(), checkpoint);
         Params::removeParams();
+        MPIHelper::getInstance().barrier();
+    
         inp = std::ifstream(prefixPath + aln->name + "_BIC.iqtree");
         
         std::cout.rdbuf(cout_buffer);
@@ -4850,46 +4857,58 @@ void runMPartition(Params &params, Alignment* aln, std::string prefixPath) {
         std::vector<double> lh[(int)models.size()];
         sitesOfParts = std::vector<std::vector<int>>(models.size());
         // printf("Calculating likelihood for %s\n", aln->name.c_str());
-        for (int i = 0; i < sitesOfParts.size(); ++i) 
+        for (int i = 0; i < sitesOfParts.size(); ++i)
             lh[i] = calcLH(params, aln, models[i], treefile, prefixPath);
         // reassign sites to subsets
         // printf("Reassigning sites for %s\n", aln->name.c_str());
-        for (int i = 0; i < aln->getNSite(); ++i) {
-            Pattern p = aln->getPattern(i);
-            vector<double> lhs;
-            for (int j = 0; j < sitesOfParts.size(); ++j) {
-                lhs.push_back(lh[j][i]);
-            }
+        if (MPIHelper::getInstance().isMaster()) {
+            for (int i = 0; i < aln->getNSite(); ++i) {
+                Pattern p = aln->getPattern(i);
+                vector<double> lhs;
+                for (int j = 0; j < sitesOfParts.size(); ++j) {
+                    lhs.push_back(lh[j][i]);
+                }
 
-            int idx = (p.isConst() ? getPartitionIdx(lhs, 1) : getPartitionIdx(lhs, 0));
-            sitesOfParts[idx].push_back(i);
-        }
-        vector<int> smalls;
-        for (int i = 0; i < sitesOfParts.size(); ++i) {
-            if (sitesOfParts[i].size() < BOUND_LEN) {
-                smalls.push_back(i);
+                int idx = (p.isConst() ? getPartitionIdx(lhs, 1) : getPartitionIdx(lhs, 0));
+                sitesOfParts[idx].push_back(i);
+            }
+            vector<int> smalls;
+            for (int i = 0; i < sitesOfParts.size(); ++i) {
+                if (sitesOfParts[i].size() < BOUND_LEN) {
+                    smalls.push_back(i);
+                }
+            }
+            if (sitesOfParts.size() - smalls.size() < 2) {
+                sitesOfParts.clear();
+            } else {
+                for (auto i: smalls) {
+                    vector<int> others;
+                    for (int j = 0; j < sitesOfParts.size(); ++j) {
+                        if (j != i) {
+                            others.push_back(j);
+                        }
+                    }
+                    for (auto j: sitesOfParts[i]) {
+                        if (lh[others[0]][j] > lh[others[1]][j]) {
+                            sitesOfParts[others[0]].push_back(j);
+                        } else {
+                            sitesOfParts[others[1]].push_back(j);
+                        }
+                    }
+                    sitesOfParts[i].clear();
+                }
             }
         }
-        if (sitesOfParts.size() - smalls.size() < 2) {
+
+        if (MPIHelper::getInstance().getNumProcesses() > 1) {
+            sitesOfParts = MPIHelper::getInstance().broadcastVectors(sitesOfParts);
+        }
+
+        if (sitesOfParts.empty()) {
             partitions.push_back(sites);
             continue;
         }
-        for (auto i: smalls) {
-            vector<int> others;
-            for (int j = 0; j < sitesOfParts.size(); ++j) {
-                if (j != i) {
-                    others.push_back(j);
-                }
-            }
-            for (auto j: sitesOfParts[i]) {
-                if (lh[others[0]][j] > lh[others[1]][j]) {
-                    sitesOfParts[others[0]].push_back(j);
-                } else {
-                    sitesOfParts[others[1]].push_back(j);
-                }
-            }
-            sitesOfParts[i].clear();
-        }
+
         printf("Splitting partitions for %s\n", aln->name.c_str());
         double prevBIC = getBIC(params, aln, prefixPath);
         double curBIC = 0;
@@ -4955,9 +4974,7 @@ void runGPartition(Params &params, Alignment* aln, std::string prefixPath) {
             }
         }
     }
-    for (int i = 0; i < sitesOfParts.size(); ++i) {
-        printf("%d: %d\n", i, sitesOfParts[i].size());
-    }
+    
     std::vector<std::vector<int>> newSitesOfParts;
     for (int i = 0; i < sitesOfParts.size(); ++i) {
         if (sitesOfParts[i].size()) {
@@ -5031,6 +5048,8 @@ void runGPartition(Params &params, Alignment* aln, std::string prefixPath) {
 }
 
 void splitAlignment(Params &params, Alignment* aln) {
+    init_random(params.ran_seed);
+    
     double begin_wallclock_time = getRealTime();
     double begin_cpu_time = getCPUTime();
 

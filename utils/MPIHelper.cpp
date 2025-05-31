@@ -282,6 +282,38 @@ vector<DoubleVector> MPIHelper::gatherAllVectors(vector<DoubleVector> &vts)
 }
 
 
+vector<IntVector> MPIHelper::broadcastVectors(vector<IntVector> &vts)
+{
+    if (getNumProcesses() == 1) {
+        // If only one process, return the input vector directly
+        return vts;
+    }
+    vector<IntVector> result(vts.size());
+    Checkpoint *ckp = new Checkpoint();
+    
+    if (isMaster()) {
+        for (int i = 0; i < vts.size(); ++i) {
+            if (!vts[i].empty()) {
+                ckp->putVector(std::to_string(i), vts[i]);
+            }
+        }
+        for (int i = 1; i < getNumProcesses(); ++i)
+            sendCheckpoint(ckp, i);    
+        result = vts; // Master process keeps its own vectors    
+    } else {
+        int src = recvCheckpoint(ckp, PROC_MASTER);
+        if (ckp->empty()) {
+            return vector<IntVector>();
+        }
+        for (const auto &entry : *ckp) {
+            ckp->getVector(entry.first, result[std::stoi(entry.first)]);
+        }
+    }
+    delete ckp;
+    return result;
+}
+
+
 vector<string> MPIHelper::gatherAllStrings(const vector<string> &strs)
 {
     if (getNumProcesses() == 1) {
