@@ -282,7 +282,7 @@ vector<DoubleVector> MPIHelper::gatherAllVectors(vector<DoubleVector> &vts)
 }
 
 
-vector<IntVector> MPIHelper::broadcastVectors(vector<IntVector> &vts)
+vector<IntVector> MPIHelper::broadcastIntVectors(vector<IntVector> &vts)
 {
     if (getNumProcesses() == 1) {
         // If only one process, return the input vector directly
@@ -312,6 +312,39 @@ vector<IntVector> MPIHelper::broadcastVectors(vector<IntVector> &vts)
     delete ckp;
     return result;
 }
+
+
+vector<DoubleVector> MPIHelper::broadcastDoubleVectors(vector<DoubleVector> &vts)
+{
+    if (getNumProcesses() == 1) {
+        // If only one process, return the input vector directly
+        return vts;
+    }
+    vector<DoubleVector> result(vts.size());
+    Checkpoint *ckp = new Checkpoint();
+    
+    if (isMaster()) {
+        for (int i = 0; i < vts.size(); ++i) {
+            if (!vts[i].empty()) {
+                ckp->putVector(std::to_string(i), vts[i]);
+            }
+        }
+        for (int i = 1; i < getNumProcesses(); ++i)
+            sendCheckpoint(ckp, i);    
+        result = vts; // Master process keeps its own vectors    
+    } else {
+        int src = recvCheckpoint(ckp, PROC_MASTER);
+        
+        for (const auto &entry : *ckp) {
+            vector<double> vec;
+            ckp->getVector(entry.first, vec);
+            result.push_back(vec);
+        }
+    }
+    delete ckp;
+    return result;
+}
+
 
 
 vector<string> MPIHelper::gatherAllStrings(const vector<string> &strs)

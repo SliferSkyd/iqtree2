@@ -107,6 +107,7 @@ public:
     }
 
     void barrier() {
+        if (getNumProcesses() == 1) return;
         #ifdef _IQTREE_MPI
             MPI_Barrier(MPI_COMM_WORLD);
         #endif
@@ -213,10 +214,15 @@ public:
     vector<DoubleVector> gatherAllVectors(vector<DoubleVector> &vts);
     
     /**
-     *  broadcast vectors from Master to all Workers
+     *  broadcast integer vectors from Master to all Workers
      */
-    vector<IntVector> broadcastVectors(vector<IntVector> &vts);
+    vector<IntVector> broadcastIntVectors(vector<IntVector> &vts);
     
+    /**
+     *  broadcast double vectors from Master to all Workers
+     */
+    vector<DoubleVector> broadcastDoubleVectors(vector<DoubleVector> &vts);
+
     /**
         wrapper for MPI_Allgatherv to gather all strings from every process to every process
         @param strs all strings processed by current process

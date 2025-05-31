@@ -1214,7 +1214,8 @@ void reportSubstitutionProcess(ostream &out, Params &params, IQTree &tree)
                 out << left << (*it)->getModelName() << " " << (*it)->treeLength() << "  " << (*it)->getModelNameParams(show_full_params) << endl;
             else
                 out << left << (*it)->getModelName() << " " << stree->part_info[part].part_rate  << "  " << (*it)->getModelNameParams(show_full_params) << endl;
-                ckp->putArray(std::to_string(part), (*it)->getModel()->num_states * (*it)->getModel()->num_states, full_mat);      
+            (*it)->getModel()->getQMatrix(full_mat);
+            ckp->putArray(std::to_string(part), (*it)->getModel()->num_states * (*it)->getModel()->num_states, full_mat);      
         }
         ckp->endStruct();
         out << endl;
@@ -4677,15 +4678,21 @@ vector<string> getCandidateModels(Params &params, Alignment *aln, std::vector<st
         }
     }
 
-    if (params.mPartition || params.gPartition) return models;
-    checkpoint->startStruct("matrix");
+    if (params.mPartition) return models;
     vector<vector<double>> matrices;
-    for (int i = 0; i < models.size(); ++i) {
-        vector<double> matrix;
-        checkpoint->getVector(std::to_string(i), matrix);
-        assert(matrix.size() == 16 || matrix.size() == 4);
-        matrices.push_back(matrix);
+
+    if (MPIHelper::getInstance().isMaster()) {
+        checkpoint->startStruct("matrix");
+
+        for (int i = 0; i < models.size(); ++i) {
+            vector<double> matrix;
+            checkpoint->getVector(std::to_string(i), matrix);
+            assert(matrix.size() == 16 || matrix.size() == 4);
+            matrices.push_back(matrix);
+        }
     }
+    
+    matrices = MPIHelper::getInstance().broadcastDoubleVectors(matrices);
 
     auto pearsonCorrelation = [&](const std::vector<double>& x, const std::vector<double>& y) {
         assert(x.size() == y.size());
@@ -4708,12 +4715,6 @@ vector<string> getCandidateModels(Params &params, Alignment *aln, std::vector<st
         
         return correlation;
     };    
-    
-    for (auto model: models) {
-        cerr << model << ' ';
-    }
-    cerr << '\n';
-
 
     for (int i = 0; i < matrices.size(); ++i) {
         if (models[i].empty()) continue;
@@ -4726,11 +4727,6 @@ vector<string> getCandidateModels(Params &params, Alignment *aln, std::vector<st
         }
     }
 
-    for (auto model: models) {
-        cerr << model << ' ';
-    }
-    cerr << '\n';
-
     for (int i = 0; i < models.size(); ++i) {
         if (models[i].empty()) {
             models.erase(models.begin() + i);
@@ -4738,10 +4734,6 @@ vector<string> getCandidateModels(Params &params, Alignment *aln, std::vector<st
         }
     }
 
-    for (auto model: models) {
-        cerr << model << ' ';
-    }
-    cerr << '\n';
     return models;
 };
 
@@ -4901,7 +4893,7 @@ void runMPartition(Params &params, Alignment* aln, std::string prefixPath) {
         }
 
         if (MPIHelper::getInstance().getNumProcesses() > 1) {
-            sitesOfParts = MPIHelper::getInstance().broadcastVectors(sitesOfParts);
+            sitesOfParts = MPIHelper::getInstance().broadcastIntVectors(sitesOfParts);
         }
 
         if (sitesOfParts.empty()) {
