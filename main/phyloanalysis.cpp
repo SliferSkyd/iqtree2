@@ -63,6 +63,7 @@
 #include "tree/upperbounds.h"
 #include "utils/MPIHelper.h"
 #include "timetree.h"
+#include <regex>
 
 #ifdef USE_BOOSTER
 extern "C" {
@@ -4651,26 +4652,30 @@ vector<string> getCandidateModels(Params &params, Alignment *aln, std::vector<st
     ifstream inp(prefixPath + aln->name + ".iqtree");
     std::string line;
     std::vector<std::string> models;
+        
+    bool inModelSection = false;
+    std::regex modelLinePattern(R"(^\s*(\d+)\s+\S+\s+[\d.]+\s+(.+))");
+
     while (std::getline(inp, line)) {
-        if (line.find("Best-fit model") != std::string::npos) {
-            std::string str = line.substr(line.find(":") + 2);
-            bool isModel = 1;
-            std::string model;
-            for (int i = 0; i < str.size(); ++i) {
-                if (str[i] == ':') {
-                    assert(isModel);
-                    models.push_back(model);
-                    isModel = false;
-                    model = "";
-                } else if (str[i] == ',') {
-                    assert(!isModel);
-                    isModel = true;
-                } else if (isModel) {
-                    model += str[i];
-                }
+        if (line.find("SUBSTITUTION PROCESS") != std::string::npos) {
+            // Start of the section
+            inModelSection = true;
+            continue;
+        }
+
+        if (inModelSection) {
+            if (line.find("TREE USED") != std::string::npos) {
+                // End of the section
+                break;
+            }
+
+            std::smatch match;
+            if (std::regex_match(line, match, modelLinePattern)) {
+                models.push_back(match[2].str());
             }
         }
     }
+
     for (auto &model: models) {
         int pos = model.find("+ASC");
         if (pos != std::string::npos) {
