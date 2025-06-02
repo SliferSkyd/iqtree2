@@ -1768,6 +1768,35 @@ struct ModelPair {
     string set_name;
     /* best model name */
     string model_name;
+
+    string encode() {
+        stringstream ostr;
+        ostr.precision(10);
+        ostr << score << " " << part1 << " " << part2 << " "
+             << logl << " " << df << " " << tree_len << " "
+             << set_name << " " << model_name;
+             
+        for (auto it = merged_set.begin(); it != merged_set.end(); it++) {
+            if (it != merged_set.begin())
+                ostr << "+";
+            ostr << *it;
+        }
+        return ostr.str();
+    }
+
+    void decode(const string &str) {
+        stringstream istr(str);
+        istr.precision(10);
+        istr >> score >> part1 >> part2 >> logl >> df >> tree_len;
+        istr >> set_name >> model_name;
+        merged_set.clear();
+        int id;
+        while (istr >> id) {
+            merged_set.insert(id);
+            if (istr.peek() == '+')
+                istr.ignore();
+        }
+    }
 };
 
 class ModelPairSet : public multimap<double, ModelPair> {
@@ -1801,6 +1830,32 @@ public:
 
             // put the compatible pair to the set
             res.insertPair(it->second);
+        }
+    }
+
+    StrVector encode() {
+        StrVector res;
+        for (auto it = begin(); it != end(); it++) {
+            stringstream ostr;
+            ostr.precision(10);
+            ostr << it->first << " " << it->second.encode() << endl;
+            res.push_back(ostr.str());
+        }
+        return res;
+    }
+
+    void decode(const StrVector &str) {
+        clear();
+        for (auto &s : str) {
+            double score;
+            stringstream ss(s);
+            ss.precision(10);
+            ss >> score;
+            
+            ModelPair pair;
+            pair.decode(s.substr(s.find(' ') + 1));
+            // insert the pair
+            insert(value_type(score, pair));
         }
     }
 
@@ -2108,6 +2163,7 @@ void testPartitionModel(Params &params, PhyloSuperTree* in_tree, ModelCheckpoint
     bool test_merge = (params.partition_merge != MERGE_NONE) && params.partition_type != TOPO_UNLINKED && (in_tree->size() > 1);
     StrVector model_names(in_tree->size(), "");
 
+    std::vector<int> part_order;
     if (params.mpi_by_model) {
 #ifdef _OPENMP
         parallel_over_partitions = !params.model_test_and_tree && (in_tree->size() >= num_threads);
@@ -2165,35 +2221,12 @@ void testPartitionModel(Params &params, PhyloSuperTree* in_tree, ModelCheckpoint
             }
         }
     } else {
-        std::vector<int> part_order;
-        if (MPIHelper::getInstance().getNumProcesses() > 1) {
-            int nprocs = MPIHelper::getInstance().getNumProcesses();
-            // enable parallel processing of partitions
-            std::priority_queue<pair<double, int> > partition_queue;
-            std::vector<IntVector> proc_partitions(nprocs);
-
-            for (int i = 0; i < MPIHelper::getInstance().getNumProcesses(); i++) {
-                partition_queue.push(make_pair(0.0, i));
-            }
-
-            // distribute partitions to processes
-            for (int i = 0; i < in_tree->size(); i++) {
-                // get the process with the least number of partitions
-                pair<double, int> p = partition_queue.top();
-                partition_queue.pop();
-                int proc_id = p.second;
-                double cost = p.first - partitionID[i].second;
-                partition_queue.push(make_pair(cost, proc_id));
-                // assign this partition to the process
-                proc_partitions[proc_id].push_back(partitionID[i].first);
-            }
-            part_order = MPIHelper::getInstance().getProcVector(proc_partitions);
-        } else {
-            // single process, just use the sorted partitionID
-            part_order.resize(in_tree->size());
-            for (int j = 0; j < in_tree->size(); j++)
-                part_order[j] = partitionID[j].first;
+        DoubleVector costs(in_tree->size());
+        for (i = 0; i < in_tree->size(); i++) {
+            Alignment *this_aln = in_tree->at(i)->aln;
+            costs[i] = ((double)this_aln->getNSeq())*this_aln->getNPattern()*this_aln->num_states;
         }
+        part_order = MPIHelper::getInstance().scheduleTasks(costs);
 
         DoubleVector lhsums(in_tree->size(), 0.0);
         DoubleVector dfsums(in_tree->size(), 0.0);
@@ -2260,22 +2293,7 @@ void testPartitionModel(Params &params, PhyloSuperTree* in_tree, ModelCheckpoint
             lhsums = MPIHelper::getInstance().sumProcs(lhsums);
             dfsums = MPIHelper::getInstance().sumProcs(dfsums);
             model_names = MPIHelper::getInstance().gatherAllStrings(model_names);
-            
-            if (MPIHelper::getInstance().isMaster()) {
-                for (int i = 1; i < MPIHelper::getInstance().getNumProcesses(); i++) {
-                    // receive model information from other processes
-                    ModelCheckpoint worker_model_info;
-                    int worker = MPIHelper::getInstance().recvCheckpoint(&worker_model_info, i);
-                    model_info.putSubCheckpoint(&worker_model_info, "");
-                }
-                for (int i = 1; i < MPIHelper::getInstance().getNumProcesses(); i++) {
-                    // send model information to other processes
-                    MPIHelper::getInstance().sendCheckpoint(&model_info, i);
-                }
-            } else {
-                MPIHelper::getInstance().sendCheckpoint(&model_info, PROC_MASTER);
-                MPIHelper::getInstance().recvCheckpoint(&model_info, PROC_MASTER);
-            }
+            MPIHelper::getInstance().syncCheckpoints(&model_info);
         }
 
         for (auto lh: lhsums) {
@@ -2370,9 +2388,17 @@ void testPartitionModel(Params &params, PhyloSuperTree* in_tree, ModelCheckpoint
             this_aln = in_tree->at(closest_pairs[i].second)->aln;
             closest_pairs[i].distance -= ((double)this_aln->getNSeq())*this_aln->getNPattern()*this_aln->num_states;
         }
+        DoubleVector costs(closest_pairs.size());
+        for (int i = 0; i < closest_pairs.size(); i++) {
+            costs[i] = closest_pairs[i].distance;
+        }
+        part_order = MPIHelper::getInstance().scheduleTasks(costs);
+
+        /*
         if (num_threads > 1) {
             std::sort(closest_pairs.begin(), closest_pairs.end(), comparePairs);
         }
+        */
         size_t num_pairs = closest_pairs.size();
         size_t compute_pairs = 0;
         // progress_display progress(num_pairs, "Calculating subsets");
@@ -2381,7 +2407,8 @@ void testPartitionModel(Params &params, PhyloSuperTree* in_tree, ModelCheckpoint
 #ifdef _OPENMP
 #pragma omp parallel for private(i) schedule(dynamic) if(!params.model_test_and_tree)
 #endif
-        for (size_t pair = 0; pair < num_pairs; pair++) {
+        for (int i = 0; i < part_order.size(); ++i) {
+            size_t pair = part_order[i];
             // information of current partitions pair
             ModelPair cur_pair;
             cur_pair.part1 = closest_pairs[pair].first;
@@ -2450,8 +2477,8 @@ void testPartitionModel(Params &params, PhyloSuperTree* in_tree, ModelCheckpoint
 			{
 				if (!done_before) {
 					replaceModelInfo(cur_pair.set_name, model_info, part_model_info);
-                    model_info.dump();
-                    num_model++;
+                    // model_info.dump();
+                    // num_model++;
                     compute_pairs++;
 //					cout.width(4);
 //					cout << right << num_model << " ";
@@ -2478,6 +2505,11 @@ void testPartitionModel(Params &params, PhyloSuperTree* in_tree, ModelCheckpoint
 			}
 
         }
+        
+        StrVector encoded_better_pairs = better_pairs.encode();
+        encoded_better_pairs = MPIHelper::getInstance().gatherStrings(encoded_better_pairs);
+        better_pairs.decode(encoded_better_pairs);
+        MPIHelper::getInstance().syncCheckpoints(&model_info);
 
         // clear the message previous on this line
         // cout << blkStr << "\r" << flush;
@@ -2575,8 +2607,10 @@ void testPartitionModel(Params &params, PhyloSuperTree* in_tree, ModelCheckpoint
 
         // sort partition by computational cost for OpenMP effciency
         partitionID.clear();
+        DoubleVector costs(in_tree->size());
         for (i = 0; i < in_tree->size(); i++) {
             Alignment *this_aln = in_tree->at(i)->aln;
+            costs[i] = ((double)this_aln->getNSeq())*this_aln->getNPattern()*this_aln->num_states;
             // computation cost is proportional to #sequences, #patterns, and #states
             partitionID.push_back({i, ((double)this_aln->getNSeq())*this_aln->getNPattern()*this_aln->num_states});
         }
@@ -2584,6 +2618,8 @@ void testPartitionModel(Params &params, PhyloSuperTree* in_tree, ModelCheckpoint
         if (num_threads > 1) {
             std::sort(partitionID.begin(), partitionID.end(), comparePartition);
         }
+
+        part_order = MPIHelper::getInstance().scheduleTasks(costs);
 
         cout << endl;
         cout << "No. Model        Score       Charset" << endl;
@@ -2593,8 +2629,8 @@ void testPartitionModel(Params &params, PhyloSuperTree* in_tree, ModelCheckpoint
         parallel_over_partitions = !params.model_test_and_tree && (in_tree->size() >= num_threads);
         #pragma omp parallel for private(i) schedule(dynamic) reduction(+: lhsum, dfsum) if(parallel_over_partitions)
     #endif
-        for (int j = 0; j < in_tree->size(); j++) {
-            i = partitionID[j].first;
+        for (int j = 0; j < part_order.size(); j++) {
+            i = part_order[j];
             PhyloTree *this_tree = in_tree->at(i);
             // scan through models for this partition, assuming the information occurs consecutively
             ModelCheckpoint part_model_info;
@@ -2621,6 +2657,7 @@ void testPartitionModel(Params &params, PhyloSuperTree* in_tree, ModelCheckpoint
     #pragma omp critical
     #endif
             {
+            /*
             num_model++;
             cout.width(4);
             cout << right << ++partition_id << " ";
@@ -2634,8 +2671,9 @@ void testPartitionModel(Params &params, PhyloSuperTree* in_tree, ModelCheckpoint
                 << convert_time(remain_time) << " left)";
             }
             cout << endl;
+            */
             replaceModelInfo(this_tree->aln->name, model_info, part_model_info);
-            model_info.dump();
+            // model_info.dump();
             }
         }
     }

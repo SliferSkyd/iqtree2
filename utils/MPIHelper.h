@@ -167,6 +167,13 @@ public:
     void gatherCheckpoint(Checkpoint *ckp);
 
     /**
+     * Schedules tasks based on the costs of each task
+     * @param costs vector of costs for each task
+     * @return vector of task indices scheduled for the current process
+     */
+    IntVector scheduleTasks(DoubleVector costs);
+
+    /**
         wrapper for MPI_Allreduce to perform element-wise summation of vectors across processes
         @param vals vector of the current process. Every vector of other processes must have the same length
         @return the summation vector
@@ -224,6 +231,11 @@ public:
     vector<DoubleVector> broadcastDoubleVectors(vector<DoubleVector> &vts);
 
     /**
+     *   Gathers all strings from every process to every process
+     */
+    vector<string> gatherAllStrings(const vector<string> &strs);
+
+    /**
         wrapper for MPI_Allgatherv to gather all strings from every process to every process
         @param strs all strings processed by current process
         @return the vector concatenated from each process' strings
@@ -244,7 +256,12 @@ public:
                                 "baz"
                                 "qux"
     */
-    vector<string> gatherAllStrings(const vector<string> &strs);
+    vector<string> gatherStrings(const vector<string> &strs);
+
+    /**
+     *   Synchronize checkpoints across all processes
+     */
+    void syncCheckpoints(Checkpoint *ckp);
 #endif
 
     void increaseTreeSent(int inc = 1) {

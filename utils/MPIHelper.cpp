@@ -4,6 +4,7 @@
 
 #include "MPIHelper.h"
 #include "timeutil.h"
+#include <queue>
 
 /**
  *  Initialize the single getInstance of MPIHelper
@@ -205,6 +206,42 @@ void MPIHelper::gatherCheckpoint(Checkpoint *ckp) {
     }
 }
 
+IntVector MPIHelper::scheduleTasks(DoubleVector costs)
+{
+    int num_tasks = costs.size();
+    int num_processes = getNumProcesses();
+
+    std::vector<IntVector> process_tasks(num_processes);
+    IntVector task_indices(num_tasks);
+    for (int i = 0; i < num_tasks; ++i) {
+        task_indices[i] = i; // Initialize task indices
+    }
+    // Sort tasks based on costs
+    std::sort(task_indices.begin(), task_indices.end(),
+              [&costs](int a, int b) { return costs[a] > costs[b]; });
+
+    // Distribute tasks evenly across processes
+    std::priority_queue<std::pair<double, int> > task_queue;
+    for (int i = 0; i < getNumProcesses(); ++i) {
+        task_queue.push({0.0, i}); // Initialize with zero cost for each process
+    }
+    for (int i = 0; i < num_tasks; ++i) {
+        // Get the process with the least cost
+        auto [current_cost, proc_id] = task_queue.top();
+        task_queue.pop();
+        
+        // Assign the task to this process
+        process_tasks[proc_id].push_back(task_indices[i]);
+
+        // Update the cost for this process
+        current_cost -= costs[task_indices[i]];
+        task_queue.push({current_cost, proc_id});
+    }
+
+    // Now task_indices contains the process ID for each task
+    return getProcVector(process_tasks);
+}
+
 DoubleVector MPIHelper::sumProcs(DoubleVector vals)
 {
     int proc_size = vals.size();
@@ -334,7 +371,7 @@ vector<DoubleVector> MPIHelper::broadcastDoubleVectors(vector<DoubleVector> &vts
         result = vts; // Master process keeps its own vectors    
     } else {
         int src = recvCheckpoint(ckp, PROC_MASTER);
-        
+
         for (const auto &entry : *ckp) {
             vector<double> vec;
             ckp->getVector(entry.first, vec);
@@ -345,7 +382,70 @@ vector<DoubleVector> MPIHelper::broadcastDoubleVectors(vector<DoubleVector> &vts
     return result;
 }
 
+vector<string> MPIHelper::gatherStrings(const vector<string> &strs)
+{
+    if (getNumProcesses() == 1) {
+        // If only one process, return the input vector directly
+        return strs;
+    }
+    vector<string> result;
+    Checkpoint *ckp = new Checkpoint();
+    for (int i = 0; i < strs.size(); ++i) {
+        if (!strs[i].empty()) {
+            ckp->put(std::to_string(i), strs[i]);
+        }
+    }
+    if (isWorker()) {
+        sendCheckpoint(ckp, PROC_MASTER);    
+        Checkpoint *recv_ckp = new Checkpoint();
+        int src = recvCheckpoint(recv_ckp, PROC_MASTER);
+        for (const auto &entry : *recv_ckp) {
+            result.push_back(entry.second);
+        }
+        delete recv_ckp;
+    } else {
+        // Master process gathers all strings from workers
+        for (int i = 1; i < getNumProcesses(); ++i) {
+            Checkpoint *recv_ckp = new Checkpoint();
+            int src = recvCheckpoint(recv_ckp, i);
+            for (const auto &entry : *recv_ckp) {
+                ckp->put(std::to_string(ckp->size()), entry.second);
+            }
+            delete recv_ckp;
+        }
+        for (int i = 1; i < getNumProcesses(); ++i) {
+            sendCheckpoint(ckp, i);
+        }
+        for (const auto &entry : *ckp) {
+            result.push_back(entry.second);
+        }
+    }
+    delete ckp;
+    return result;
+}
 
+void MPIHelper::syncCheckpoints(Checkpoint *ckp)
+{
+    if (getNumProcesses() == 1) {
+        // If only one process, no need to sync
+        return;
+    }
+    if (isMaster()) {
+        for (int i = 1; i < getNumProcesses(); i++) {
+            // receive model information from other processes
+            Checkpoint *worker_ckp = new Checkpoint();
+            int worker = MPIHelper::getInstance().recvCheckpoint(worker_ckp, i);
+            ckp->putSubCheckpoint(worker_ckp, "");
+        }
+        for (int i = 1; i < MPIHelper::getInstance().getNumProcesses(); i++) {
+            // send model information to other processes
+            MPIHelper::getInstance().sendCheckpoint(ckp, i);
+        }
+    } else {
+        MPIHelper::getInstance().sendCheckpoint(ckp, PROC_MASTER);
+        MPIHelper::getInstance().recvCheckpoint(ckp, PROC_MASTER);
+    }
+}
 
 vector<string> MPIHelper::gatherAllStrings(const vector<string> &strs)
 {
