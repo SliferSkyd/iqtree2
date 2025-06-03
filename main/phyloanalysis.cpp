@@ -4509,7 +4509,9 @@ vector<double> calcLH(Params& params, Alignment* aln, std::string model, std::st
             "-t", &treefile[0],
             "-keep-ident",
             "--safe",
-            "--sitelh", 
+            "--sitelh",
+            "-blfix",
+            "--fast", 
             "-T", &std::to_string(params.num_threads)[0],
             "-redo",
             "-seed", &std::to_string(params.ran_seed)[0]

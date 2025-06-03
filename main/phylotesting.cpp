@@ -1774,12 +1774,10 @@ struct ModelPair {
         ostr.precision(10);
         ostr << score << " " << part1 << " " << part2 << " "
              << logl << " " << df << " " << tree_len << " "
-             << set_name << " " << model_name;
-             
+             << set_name << " " << model_name << " ";
+        
         for (auto it = merged_set.begin(); it != merged_set.end(); it++) {
-            if (it != merged_set.begin())
-                ostr << "+";
-            ostr << *it;
+            ostr << *it << " ";
         }
         return ostr.str();
     }
@@ -1793,8 +1791,6 @@ struct ModelPair {
         int id;
         while (istr >> id) {
             merged_set.insert(id);
-            if (istr.peek() == '+')
-                istr.ignore();
         }
     }
 };
@@ -2510,7 +2506,8 @@ void testPartitionModel(Params &params, PhyloSuperTree* in_tree, ModelCheckpoint
         encoded_better_pairs = MPIHelper::getInstance().gatherStrings(encoded_better_pairs);
         better_pairs.decode(encoded_better_pairs);
         MPIHelper::getInstance().syncCheckpoints(&model_info);
-
+        printf("#better_pairs: %d\n", better_pairs.size());
+        
         // clear the message previous on this line
         // cout << blkStr << "\r" << flush;
         // progress.done();
@@ -2676,6 +2673,7 @@ void testPartitionModel(Params &params, PhyloSuperTree* in_tree, ModelCheckpoint
             // model_info.dump();
             }
         }
+        MPIHelper::getInstance().syncCheckpoints(&model_info);
     }
 
     inf_score = computeInformationScore(lhsum, dfsum, ssize, params.model_test_criterion);
