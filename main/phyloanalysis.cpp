@@ -4686,7 +4686,7 @@ vector<string> getCandidateModels(Params &params, Alignment *aln, std::vector<st
     }
 
     if (params.mPartition) return models;
-    vector<vector<double>> matrices;
+    vector<DoubleVector> matrices;
 
     if (MPIHelper::getInstance().isMaster()) {
         checkpoint->startStruct("matrix");
@@ -4993,14 +4993,13 @@ void runGPartition(Params &params, Alignment* aln, std::string prefixPath) {
 
     const std::string treefile = prefixPath + aln->name + ".treefile";
     // calculate likelihood for each subset based on the best model
-
     std::vector<DoubleVector> lh(models.size());
     sitesOfParts = std::vector<std::vector<int>>(models.size());
 
     // compute likelihood for each subset in parallel
     int blockSize = ceil((double)models.size() / MPIHelper::getInstance().getNumProcesses());
     int startID = MPIHelper::getInstance().getProcessID() * blockSize;
-    int endID = min(startID + blockSize, (int)sitesOfParts.size());
+    int endID = min(startID + blockSize, (int)models.size());
 
     for (int i = startID; i < endID; ++i) { 
         lh[i] = calcLH(params, aln, models[i], treefile, prefixPath);

@@ -371,12 +371,9 @@ vector<DoubleVector> MPIHelper::broadcastDoubleVectors(vector<DoubleVector> &vts
         result = vts; // Master process keeps its own vectors    
     } else {
         int src = recvCheckpoint(ckp, PROC_MASTER);
-
-        for (const auto &entry : *ckp) {
-            vector<double> vec;
-            ckp->getVector(entry.first, vec);
-            result.push_back(vec);
-        }
+        result.resize(ckp->size());
+        for (const auto &entry : *ckp)
+            ckp->getVector(entry.first, result[std::stoi(entry.first)]);
     }
     delete ckp;
     return result;
