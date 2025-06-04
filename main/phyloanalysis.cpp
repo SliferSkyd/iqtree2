@@ -4694,7 +4694,7 @@ vector<string> getCandidateModels(Params &params, Alignment *aln, std::vector<st
         for (int i = 0; i < models.size(); ++i) {
             vector<double> matrix;
             checkpoint->getVector(std::to_string(i), matrix);
-            assert(matrix.size() == 16 || matrix.size() == 4);
+            assert(matrix.size() == 16 || matrix.size() == 400);
             matrices.push_back(matrix);
         }
     }
