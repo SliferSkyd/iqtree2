@@ -4793,6 +4793,85 @@ double getBIC(Params &params, Alignment* aln, std::string prefixPath) {
     exit(0);
 }
 
+void extractPartitions(const std::string& inputPath, const std::string& partOut) {
+    std::ifstream infile(inputPath);
+    std::ofstream partfile(partOut);
+
+    if (!infile || !partfile) {
+        std::cerr << "Error opening files.\n";
+        exit(-1);
+    }
+
+    std::string line;
+    bool inPartitionBlock = false;
+
+    partfile << "#nexus\nbegin sets;\n";
+    while (std::getline(infile, line)) {
+
+        if (line.find("begin sets;") != std::string::npos) {
+            inPartitionBlock = true;
+            continue;
+        }
+
+        if (inPartitionBlock && line.find("charpartition") != std::string::npos) {
+            break; // End of partition block
+        }
+
+        partfile << line << "\n";
+
+    }
+    partfile << "end;\n";
+}
+
+void mergePartitions(Params &params, Alignment *aln, std::vector<std::vector<int>> sitesOfParts, std::string prefixPath) {
+    if (MPIHelper::getInstance().isMaster()) 
+        printPartitions(prefixPath + aln->name + ".partitions", sitesOfParts);
+    MPIHelper::getInstance().barrier();
+
+    std::iostream null_stream(nullptr);
+    std::streambuf* cout_buffer = std::cout.rdbuf(null_stream.rdbuf());
+
+
+    std::string arg_s = prefixPath + aln->name;
+    std::string arg_prefix = prefixPath + aln->name;
+    std::string arg_p = prefixPath + aln->name + ".partitions";
+    
+    std::vector<std::string> args;
+
+    args.push_back("");
+    args.push_back("-s");         args.push_back(arg_s);
+    args.push_back("-p");         args.push_back(arg_p);
+    args.push_back("--prefix");   args.push_back(arg_prefix);
+    args.push_back("-m");         args.push_back("MFP+MERGE");
+    args.push_back("-keep-ident");
+    args.push_back("--fast");
+    args.push_back("--safe");
+    args.push_back("--mset");     args.push_back(params.model_set);
+    args.push_back("-T");         args.push_back(std::to_string(params.num_threads));
+    args.push_back("--redo");
+    args.push_back("--seed");     args.push_back(std::to_string(params.ran_seed));
+
+    std::vector<char*> argv;
+    for (auto& arg : args) {
+        argv.push_back(&arg[0]);
+    }
+
+    int argc = argv.size();
+    char** argv_raw = argv.data();
+
+    Params::addParams(argc, argv_raw);
+    Checkpoint *checkpoint = new Checkpoint;
+    runPhyloAnalysis(Params::getInstance(), checkpoint);
+    Params::removeParams();
+    std::cout.rdbuf(cout_buffer);
+    
+    MPIHelper::getInstance().barrier();
+
+    if (MPIHelper::getInstance().isMaster()) {
+        extractPartitions(prefixPath + aln->name + ".best_scheme.nex", std::string(params.out_prefix) + "partitions.nexus");
+    }
+}
+
 const int BOUND_LEN = 50;
 
 void runMPartition(Params &params, Alignment* aln, std::string prefixPath) {
@@ -5040,9 +5119,8 @@ void runGPartition(Params &params, Alignment* aln, std::string prefixPath) {
         }
         sitesOfParts[i].clear();
     }
-    
-    if (MPIHelper::getInstance().isMaster())        
-        printPartitions(string(params.out_prefix) + "partitions.nexus", sitesOfParts);
+    // merge small subsets using PartitionFinder
+    mergePartitions(params, aln, sitesOfParts, prefixPath);
 }
 
 void splitAlignment(Params &params, Alignment* aln) {

@@ -2502,11 +2502,12 @@ void testPartitionModel(Params &params, PhyloSuperTree* in_tree, ModelCheckpoint
 
         }
         
-        StrVector encoded_better_pairs = better_pairs.encode();
-        encoded_better_pairs = MPIHelper::getInstance().gatherStrings(encoded_better_pairs);
-        better_pairs.decode(encoded_better_pairs);
-        MPIHelper::getInstance().syncCheckpoints(&model_info);
-        printf("#better_pairs: %d\n", better_pairs.size());
+        if (MPIHelper::getInstance().getNumProcesses() > 1) {
+            StrVector encoded_better_pairs = better_pairs.encode();
+            encoded_better_pairs = MPIHelper::getInstance().gatherStrings(encoded_better_pairs);
+            better_pairs.decode(encoded_better_pairs);
+            MPIHelper::getInstance().syncCheckpoints(&model_info);
+        }
         
         // clear the message previous on this line
         // cout << blkStr << "\r" << flush;
