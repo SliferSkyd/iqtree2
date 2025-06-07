@@ -4805,12 +4805,9 @@ void extractPartitions(const std::string& inputPath, const std::string& partOut)
     std::string line;
     bool inPartitionBlock = false;
 
-    partfile << "#nexus\nbegin sets;\n";
-    while (std::getline(infile, line)) {
-
+    while (std::getline(infile, line)) {    
         if (line.find("begin sets;") != std::string::npos) {
             inPartitionBlock = true;
-            continue;
         }
 
         if (inPartitionBlock && line.find("charpartition") != std::string::npos) {
