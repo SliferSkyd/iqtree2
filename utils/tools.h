@@ -630,24 +630,9 @@ public:
     static void removeParams();
 
     /**
-     * Applying TIGER algorithm for splitting alignment
+     * Split alignment using hPartition
      */
-    bool TIGER;
-
-    /**
-     * Applying fastTIGER algorithm for splitting alignment
-     */
-    bool fastTIGER;
-
-    /**
-     * Split alignment using gPartition
-     */
-    bool gPartition;
-
-    /**
-     * Split alignment using mPartition
-     */
-    bool mPartition;
+    bool hPartition;
 
     /**
     *  Fast and accurate optimiation for alpha and p_invar

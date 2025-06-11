@@ -1016,8 +1016,7 @@ void parseArg(int argc, char *argv[], Params &params) {
     int cnt;
     progress_display::setProgressDisplay(false);
     verbose_mode = VB_MIN;
-    params.mPartition = false;
-    params.gPartition = false;
+    params.hPartition = false;
     params.tree_gen = NONE;
     params.user_file = NULL;
     params.constraint_tree_file = NULL;
@@ -1550,29 +1549,8 @@ void parseArg(int argc, char *argv[], Params &params) {
                 printCopyright(cout);
                 exit(EXIT_SUCCESS);
             }
-            if (strcmp(argv[cnt], "-mPartition") == 0 || strcmp(argv[cnt],"--mPartition") == 0) {
-                params.mPartition = true;
-                params.gPartition = false;
-                params.TIGER = true;
-                params.fastTIGER = false;
-                continue;
-            }
-            if (strcmp(argv[cnt], "-gPartition") == 0 || strcmp(argv[cnt],"--gPartition") == 0) {
-                params.mPartition = false;
-                params.gPartition = true;
-                params.TIGER = false;
-                params.fastTIGER = true;
-                continue;
-            }
-            
-            if (strcmp(argv[cnt], "-TIGER") == 0 || strcmp(argv[cnt],"--TIGER") == 0) {
-                params.TIGER = true;
-                params.fastTIGER = false;
-                continue;
-            }
-            if (strcmp(argv[cnt], "-fastTIGER") == 0 || strcmp(argv[cnt],"--fastTIGER") == 0) {
-                params.fastTIGER = true;
-                params.TIGER = false;
+            if (strcmp(argv[cnt], "-hPartition") == 0 || strcmp(argv[cnt],"--hPartition") == 0) {
+                params.hPartition = true;
                 continue;
             }
 

@@ -4344,75 +4344,6 @@ void doSymTest(Alignment *alignment, Params &params) {
         exit(EXIT_SUCCESS);
 }
 
-
-vector<double> calcRate(Alignment *aln) {    
-    double begin_wallclock_time = getRealTime();
-    double begin_cpu_time = getCPUTime();
-
-    vector<double> rates;
-    vector<vector<vector<int>>> sequences(aln->size());
-
-    for (int i = 0; i < aln->size(); ++i) {
-        Pattern p = aln->at(i);
-        if (p.isConst()) continue;
-        map<StateType, vector<int>> states;
-        for (int j = 0; j < p.size(); ++j) {
-            states[p[j]].push_back(j);
-        }
-        
-        for (auto it = states.begin(); it != states.end(); ++it)
-            sequences[i].push_back(it->second);
-    }
-    vector<double> ratePatterns(aln->size());
-    
-    #ifdef _OPENMP
-    #pragma omp parallel for schedule(dynamic,1)
-    #endif
-    for (int i = 0; i < aln->size(); ++i) {
-        if (aln->at(i).isConst()) {
-            ratePatterns[i] = 1.0;
-            continue;
-        }
-        vector<int> inSeq(aln->getNSeq());
-        for (int j = 0; j < sequences[i].size(); ++j) {
-            for (auto x : sequences[i][j]) {
-                inSeq[x] = j;
-            }
-        }
-
-        int totalCount = 0;
-        double score = 0;
-        for (int j = 0; j < aln->size(); ++j) {
-            if (aln->at(j).isConst()) continue;
-            int cnt = 0;
-            totalCount += aln->at(j).frequency;
-            for (auto seq2 : sequences[j]) {
-                int idx = inSeq[seq2[0]];
-                auto seq = sequences[i][idx];
-                bool found = true;
-                for (int x = 0, y = 0; x < seq2.size(); ++x) {
-                    while (y < seq.size() && seq[y] != seq2[x]) ++y;
-                    if (y == seq.size()) {
-                        found = false;
-                        break;
-                    }
-                    ++y;
-                }
-                if (found) ++cnt;
-            }
-            score += 1.0 * cnt / sequences[j].size() * aln->at(j).frequency;
-        }
-        ratePatterns[i] = score / totalCount;
-    }
-    for (int i = 0; i < aln->getNSite(); ++i)
-        rates.push_back(ratePatterns[aln->getPatternID(i)]);
-    std::cout << "TIGER took "
-    << convert_time(getRealTime() - begin_wallclock_time) << " (of wall-clock time) "
-    << convert_time(getCPUTime() - begin_cpu_time) << " (of CPU time)" << endl;
-
-    return rates;
-}
-
 vector<double> calcRateFast(Alignment *aln) {    
     double begin_wallclock_time = getRealTime();
     double begin_cpu_time = getCPUTime();
@@ -4495,76 +4426,44 @@ vector<double> calcLH(Params& params, Alignment* aln, std::string model, std::st
     std::streambuf* cout_buffer = std::cout.rdbuf(null_stream.rdbuf());
     std::string outputFile;
 
-    if (params.gPartition) {
-        std::string filename = prefixPath + aln->name;
-        if (MPIHelper::getInstance().getNumProcesses() > 1) {
-            filename += "_proc" + std::to_string(MPIHelper::getInstance().getProcessID());
-        }
-        aln->printAlignment(IN_PHYLIP, filename.c_str());
-
-        char* argv[] = {
-            "",
-            "-s", &filename[0],
-            "-m", &model[0],
-            "-t", &treefile[0],
-            "-keep-ident",
-            "--safe",
-            "--sitelh",
-            "-blfix",
-            "--fast", 
-            "-T", &std::to_string(params.num_threads)[0],
-            "-redo",
-            "-seed", &std::to_string(params.ran_seed)[0]
-        };
-        int argc = sizeof(argv) / sizeof(char*);
-        int numProcesses = MPIHelper::getInstance().getNumProcesses();
-        int processID = MPIHelper::getInstance().getProcessID();
-
-        MPIHelper::getInstance().setNumProcesses(1);
-        MPIHelper::getInstance().setProcessID(0);
-        Params::addParams(argc, argv);
-        Checkpoint *checkpoint = new Checkpoint;
-        runPhyloAnalysis(Params::getInstance(), checkpoint);
-        Params::removeParams();
-
-        MPIHelper::getInstance().setNumProcesses(numProcesses);
-        MPIHelper::getInstance().setProcessID(processID);
-
-        outputFile = prefixPath + aln->name + ".sitelh";
-        if (MPIHelper::getInstance().getNumProcesses() > 1) {
-            outputFile = prefixPath + aln->name + "_proc" + std::to_string(MPIHelper::getInstance().getProcessID()) + ".sitelh";
-        }
-    } else {
-        std::string filename = prefixPath + aln->name;
-        if (MPIHelper::getInstance().isMaster()) {
-            aln->printAlignment(IN_PHYLIP, filename.c_str());
-        }
-
-        MPIHelper::getInstance().barrier();
-        char* argv[] = {
-            "",
-            "-s", &filename[0],
-            "-m", &model[0],
-            "-t", &treefile[0],
-            "-keep-ident",
-            "--safe",
-            "--sitelh", 
-            "-T", &std::to_string(params.num_threads)[0],
-            "-redo",
-            "--consistent-ts",
-            "-seed", &std::to_string(params.ran_seed)[0]
-        };
-        int argc = sizeof(argv) / sizeof(char*);
-        Params::addParams(argc, argv);
-        Checkpoint *checkpoint = new Checkpoint;
-        runPhyloAnalysis(Params::getInstance(), checkpoint);
-        Params::removeParams();
-
-        MPIHelper::getInstance().barrier();
-
-        outputFile = prefixPath + aln->name + ".sitelh";
+    std::string filename = prefixPath + aln->name;
+    if (MPIHelper::getInstance().getNumProcesses() > 1) {
+        filename += "_proc" + std::to_string(MPIHelper::getInstance().getProcessID());
     }
-    
+    aln->printAlignment(IN_PHYLIP, filename.c_str());
+
+    char* argv[] = {
+        "",
+        "-s", &filename[0],
+        "-m", &model[0],
+        "-t", &treefile[0],
+        "-keep-ident",
+        "--safe",
+        "--sitelh",
+        "-blfix",
+        "--fast", 
+        "-T", &std::to_string(params.num_threads)[0],
+        "-redo",
+        "-seed", &std::to_string(params.ran_seed)[0]
+    };
+    int argc = sizeof(argv) / sizeof(char*);
+    int numProcesses = MPIHelper::getInstance().getNumProcesses();
+    int processID = MPIHelper::getInstance().getProcessID();
+
+    MPIHelper::getInstance().setNumProcesses(1);
+    MPIHelper::getInstance().setProcessID(0);
+    Params::addParams(argc, argv);
+    Checkpoint *checkpoint = new Checkpoint;
+    runPhyloAnalysis(Params::getInstance(), checkpoint);
+    Params::removeParams();
+
+    MPIHelper::getInstance().setNumProcesses(numProcesses);
+    MPIHelper::getInstance().setProcessID(processID);
+
+    outputFile = prefixPath + aln->name + ".sitelh";
+    if (MPIHelper::getInstance().getNumProcesses() > 1) {
+        outputFile = prefixPath + aln->name + "_proc" + std::to_string(MPIHelper::getInstance().getProcessID()) + ".sitelh";
+    }
     std::cout.rdbuf(cout_buffer);
 
     std::ifstream in(outputFile);
@@ -4625,11 +4524,6 @@ vector<string> getCandidateModels(Params &params, Alignment *aln, std::vector<st
     args.push_back("-keep-ident");
     args.push_back("--fast");
     args.push_back("--safe");
-
-    if (params.mPartition && MPIHelper::getInstance().getNumProcesses() > 1) {
-        args.push_back("--mpi-model");
-    }
-
     args.push_back("--mset");     args.push_back(params.model_set);
     args.push_back("-T");         args.push_back(std::to_string(params.num_threads));
     args.push_back("--redo");
@@ -4685,7 +4579,6 @@ vector<string> getCandidateModels(Params &params, Alignment *aln, std::vector<st
         }
     }
 
-    if (params.mPartition) return models;
     vector<DoubleVector> matrices;
 
     if (MPIHelper::getInstance().isMaster()) {
@@ -4743,55 +4636,6 @@ vector<string> getCandidateModels(Params &params, Alignment *aln, std::vector<st
 
     return models;
 };
-
-double getBIC(Params &params, Alignment* aln, std::string prefixPath) {
-    std::ifstream inp(prefixPath + aln->name + "_BIC.iqtree");
-    if (!inp) {
-        std::iostream null_stream(nullptr);
-        std::streambuf* cout_buffer = std::cout.rdbuf(null_stream.rdbuf());
-
-        if (MPIHelper::getInstance().isMaster()) 
-            aln->printAlignment(IN_PHYLIP, (prefixPath + aln->name).c_str());
-    
-        MPIHelper::getInstance().barrier();
-
-        std::string arg_s = prefixPath + aln->name;
-        std::string arg_prefix = prefixPath + aln->name + "_BIC";
-
-        char* argv[] = { 
-            "",
-            "-s", &arg_s[0],
-            "--mset", &params.model_set[0],
-            "--prefix", &arg_prefix[0],
-            "-m", "MF",
-            "-keep-ident",
-            "--fast",
-            "-T", &std::to_string(params.num_threads)[0],
-            "--safe",
-            "--redo",
-            "--consistent-ts",
-            "--seed", &std::to_string(params.ran_seed)[0]
-        };
-        int argc = sizeof(argv) / sizeof(char*);
-        Params::addParams(argc, argv);
-        Checkpoint *checkpoint = new Checkpoint;
-        runPhyloAnalysis(Params::getInstance(), checkpoint);
-        Params::removeParams();
-        MPIHelper::getInstance().barrier();
-    
-        inp = std::ifstream(prefixPath + aln->name + "_BIC.iqtree");
-        
-        std::cout.rdbuf(cout_buffer);
-    }
-    std::string line;
-    while (std::getline(inp, line)) {
-        if (line.find("Bayesian information criterion (BIC) score:") != std::string::npos) {
-            std::string str = line.substr(line.find(":") + 2);
-            return std::stod(str);
-        }
-    }
-    exit(0);
-}
 
 void extractPartitions(const std::string& inputPath, const std::string& partOut) {
     std::ifstream infile(inputPath);
@@ -4871,150 +4715,10 @@ void mergePartitions(Params &params, Alignment *aln, std::vector<std::vector<int
 
 const int BOUND_LEN = 50;
 
-void runMPartition(Params &params, Alignment* aln, std::string prefixPath) {
-    std::vector<double> rates = (params.fastTIGER ? calcRateFast(aln) : calcRate(aln));
-
-    queue<std::pair<Alignment*, std::vector<int>>> alnQueue;
-    vector<int> sites;
-    for (int i = 0; i < aln->getNSite(); ++i) sites.push_back(i);
-    alnQueue.push({aln, sites});
-
-    getBIC(params, aln, prefixPath);
-
-    const std::string treefile = prefixPath + aln->name + "_BIC.treefile";
-    
-    std::vector<std::vector<int>> partitions;
-
-    while (!alnQueue.empty()) {
-        auto [aln, sites] = alnQueue.front();
-        alnQueue.pop();
-        
-        if (sites.size() <= BOUND_LEN * 2) {    
-            partitions.push_back(sites);
-            continue;
-        }
-
-        double maxRate = 0, minRate = 1;
-        
-        std::vector<double> curRates;
-        for (auto i: sites) {
-            curRates.push_back(rates[i]);
-        }
-        sort(curRates.begin(), curRates.end());
-        int idx = static_cast<int>(std::round(curRates.size() * 1.0 / 100)) - 1;
-        if (idx >= BOUND_LEN) {
-            minRate = curRates[idx];
-            maxRate = curRates[static_cast<int>(std::round(curRates.size() * 99.0 / 100)) - 1];
-        } else {
-            for (auto i: sites) {
-                maxRate = max(maxRate, rates[i]);
-                minRate = min(minRate, rates[i]);
-            }
-        }
-
-        double lowerPivot = minRate + (maxRate - minRate) / 3;
-        double upperPivot = maxRate - (maxRate - minRate) / 3;
-
-        std::vector<std::vector<int>> sitesOfParts(3);
-        for (int i = 0; i < sites.size(); ++i) {
-            if (rates[sites[i]] < lowerPivot) sitesOfParts[0].push_back(i);
-            else if (rates[sites[i]] < upperPivot) sitesOfParts[1].push_back(i);
-            else sitesOfParts[2].push_back(i);
-        }
-        
-        if (sitesOfParts[0].size() < 10 || sitesOfParts[1].size() < 10 || sitesOfParts[2].size() < 10) {
-            partitions.push_back(sites);
-            continue;
-        }
-
-        std::vector<std::string> models = getCandidateModels(params, aln, sitesOfParts, prefixPath);
-       
-        std::vector<double> lh[(int)models.size()];
-        sitesOfParts = std::vector<std::vector<int>>(models.size());
-        // printf("Calculating likelihood for %s\n", aln->name.c_str());
-        for (int i = 0; i < sitesOfParts.size(); ++i)
-            lh[i] = calcLH(params, aln, models[i], treefile, prefixPath);
-        // reassign sites to subsets
-        // printf("Reassigning sites for %s\n", aln->name.c_str());
-        if (MPIHelper::getInstance().isMaster()) {
-            for (int i = 0; i < aln->getNSite(); ++i) {
-                Pattern p = aln->getPattern(i);
-                vector<double> lhs;
-                for (int j = 0; j < sitesOfParts.size(); ++j) {
-                    lhs.push_back(lh[j][i]);
-                }
-
-                int idx = (p.isConst() ? getPartitionIdx(lhs, 1) : getPartitionIdx(lhs, 0));
-                sitesOfParts[idx].push_back(i);
-            }
-            vector<int> smalls;
-            for (int i = 0; i < sitesOfParts.size(); ++i) {
-                if (sitesOfParts[i].size() < BOUND_LEN) {
-                    smalls.push_back(i);
-                }
-            }
-            if (sitesOfParts.size() - smalls.size() < 2) {
-                sitesOfParts.clear();
-            } else {
-                for (auto i: smalls) {
-                    vector<int> others;
-                    for (int j = 0; j < sitesOfParts.size(); ++j) {
-                        if (j != i) {
-                            others.push_back(j);
-                        }
-                    }
-                    for (auto j: sitesOfParts[i]) {
-                        if (lh[others[0]][j] > lh[others[1]][j]) {
-                            sitesOfParts[others[0]].push_back(j);
-                        } else {
-                            sitesOfParts[others[1]].push_back(j);
-                        }
-                    }
-                    sitesOfParts[i].clear();
-                }
-            }
-        }
-
-        if (MPIHelper::getInstance().getNumProcesses() > 1) {
-            sitesOfParts = MPIHelper::getInstance().broadcastIntVectors(sitesOfParts);
-        }
-
-        if (sitesOfParts.empty()) {
-            partitions.push_back(sites);
-            continue;
-        }
-
-        printf("Splitting partitions for %s\n", aln->name.c_str());
-        double prevBIC = getBIC(params, aln, prefixPath);
-        double curBIC = 0;
-        vector<pair<Alignment*, vector<int>>> subAlns;
-        for (int i = 0; i < sitesOfParts.size(); ++i) {
-            if (sitesOfParts[i].empty()) continue;
-            Alignment* subAln = new Alignment;
-            subAln->extractSites(aln, sitesOfParts[i]);
-            subAln->name = aln->name + "_" + std::to_string(i);
-            std::vector<int> subSites;
-            for (int j: sitesOfParts[i]) subSites.push_back(sites[j]);
-            subAlns.push_back({subAln, subSites});
-            curBIC += getBIC(params, subAln, prefixPath);
-        }
-        printf("BIC: %lf -> %lf\n", prevBIC, curBIC);
-        if (prevBIC > curBIC) {
-            for (auto [subAln, subSites]: subAlns) {
-                alnQueue.push({subAln, subSites});
-            }
-        } else {
-            partitions.push_back(sites);
-        }
-    }
-
-    printPartitions(string(params.out_prefix) + "partitions.nexus", partitions);
-}
-
-void runGPartition(Params &params, Alignment* aln, std::string prefixPath) {
+void runhPartition(Params &params, Alignment* aln, std::string prefixPath) {
     const int numSubsets = ceil(aln->getNSite() / 100);
         
-    std::vector<double> rates = (params.fastTIGER ? calcRateFast(aln) : calcRate(aln));
+    std::vector<double> rates = calcRateFast(aln);
 
     double maxRate = *max_element(rates.begin(), rates.end());
     double minRate = *min_element(rates.begin(), rates.end());
@@ -5132,8 +4836,7 @@ void splitAlignment(Params &params, Alignment* aln) {
     }
     system(("mkdir " + prefixPath).c_str());
     
-    if (params.gPartition) runGPartition(params, aln, prefixPath);
-    else runMPartition(params, aln, prefixPath);
+    runhPartition(params, aln, prefixPath);
 
     system(("rm -rf " + prefixPath).c_str());
     
@@ -5316,7 +5019,7 @@ void runPhyloAnalysis(Params &params, Checkpoint *checkpoint, IQTree *&tree, Ali
         // run Arndt's plot of tree likelihoods against bootstrap alignments
 //        runBootLhTest(params, alignment, *tree);
         outError("Obsolete feature");
-    } else if (params.gPartition || params.mPartition) {
+    } else if (params.hPartition) {
         splitAlignment(params, alignment);
     } else if (params.num_bootstrap_samples == 0) {
     /********************************************************************************
