@@ -4594,10 +4594,6 @@ vector<string> getCandidateModels(Params &params, Alignment *aln, std::vector<st
               << convert_time(getRealTime() - begin_wallclock_time) << " (of wall-clock time) "
               << convert_time(getCPUTime() - begin_cpu_time) << " (of CPU time)" << std::endl;
 
-    if (models.size() == 400) {
-        return models;
-    }
-
     vector<DoubleVector> matrices;
 
     if (MPIHelper::getInstance().isMaster()) {
@@ -4610,8 +4606,12 @@ vector<string> getCandidateModels(Params &params, Alignment *aln, std::vector<st
             matrices.push_back(matrix);
         }
     }
-    
+
     matrices = MPIHelper::getInstance().broadcastDoubleVectors(matrices);
+
+    if (matrices.size() == 400) {
+        return models;
+    }
 
     auto pearsonCorrelation = [&](const std::vector<double>& x, const std::vector<double>& y) {
         assert(x.size() == y.size());
