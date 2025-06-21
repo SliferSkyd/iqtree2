@@ -635,6 +635,11 @@ public:
     bool hPartition;
 
     /**
+     *  Enable PartitionFinder for hPartition
+     */
+    bool hPartition_PF;
+
+    /**
     *  Fast and accurate optimiation for alpha and p_invar
     */
     bool fai;

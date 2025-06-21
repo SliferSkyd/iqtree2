@@ -1017,6 +1017,7 @@ void parseArg(int argc, char *argv[], Params &params) {
     progress_display::setProgressDisplay(false);
     verbose_mode = VB_MIN;
     params.hPartition = false;
+    params.hPartition_PF = false;
     params.tree_gen = NONE;
     params.user_file = NULL;
     params.constraint_tree_file = NULL;
@@ -1553,6 +1554,12 @@ void parseArg(int argc, char *argv[], Params &params) {
                 params.hPartition = true;
                 continue;
             }
+
+            if (strcmp(argv[cnt], "-hPartition-pf") == 0 || strcmp(argv[cnt],"--hPartition-pf") == 0) {
+                params.hPartition_PF = true;
+                continue;
+            }
+            
 
 			if (strcmp(argv[cnt], "-ho") == 0 || strcmp(argv[cnt], "-?") == 0) {
 				usage_iqtree(argv, false);

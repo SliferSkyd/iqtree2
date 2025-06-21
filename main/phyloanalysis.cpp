@@ -4422,6 +4422,9 @@ int getPartitionIdx(vector<double> lh, int stg) {
 }
 
 vector<double> calcLH(Params& params, Alignment* aln, std::string model, std::string treefile, std::string prefixPath) {    
+    double begin_wallclock_time = getRealTime();
+    double begin_cpu_time = getCPUTime();
+   
     std::iostream null_stream(nullptr);
     std::streambuf* cout_buffer = std::cout.rdbuf(null_stream.rdbuf());
     std::string outputFile;
@@ -4478,6 +4481,10 @@ vector<double> calcLH(Params& params, Alignment* aln, std::string model, std::st
     while (iss >> l) {
         lh.push_back(l);
     }
+
+    cout << "Likelihoods computed for model " << model << " in "
+         << convert_time(getRealTime() - begin_wallclock_time) << " (of wall-clock time) "
+         << convert_time(getCPUTime() - begin_cpu_time) << " (of CPU time)" << endl; 
     return lh;
 };
 
@@ -4499,6 +4506,10 @@ void printPartitions(std::string filename, std::vector<std::vector<int>> sitesOf
 }
 
 vector<string> getCandidateModels(Params &params, Alignment *aln, std::vector<std::vector<int>> sitesOfParts, std::string prefixPath) {
+    double begin_wallclock_time = getRealTime();
+    double begin_cpu_time = getCPUTime();
+    cout << "Computing candidate models for partitioned analysis..." << endl;
+
     if (MPIHelper::getInstance().isMaster()) 
         printPartitions(prefixPath + aln->name + ".partitions", sitesOfParts);
     
@@ -4577,6 +4588,14 @@ vector<string> getCandidateModels(Params &params, Alignment *aln, std::vector<st
         if (pos != std::string::npos) {
             model = model.substr(0, pos) + model.substr(pos + 4);
         }
+    }
+
+    std::cout << "Candidate models computed in "
+              << convert_time(getRealTime() - begin_wallclock_time) << " (of wall-clock time) "
+              << convert_time(getCPUTime() - begin_cpu_time) << " (of CPU time)" << std::endl;
+
+    if (models.size() == 400) {
+        return models;
     }
 
     vector<DoubleVector> matrices;
@@ -4665,6 +4684,9 @@ void extractPartitions(const std::string& inputPath, const std::string& partOut)
 }
 
 void mergePartitions(Params &params, Alignment *aln, std::vector<std::vector<int>> sitesOfParts, std::string prefixPath) {
+    double begin_wallclock_time = getRealTime();
+    double begin_cpu_time = getCPUTime();
+
     if (MPIHelper::getInstance().isMaster()) 
         printPartitions(prefixPath + aln->name + ".partitions", sitesOfParts);
     MPIHelper::getInstance().barrier();
@@ -4683,7 +4705,7 @@ void mergePartitions(Params &params, Alignment *aln, std::vector<std::vector<int
     args.push_back("-s");         args.push_back(arg_s);
     args.push_back("-p");         args.push_back(arg_p);
     args.push_back("--prefix");   args.push_back(arg_prefix);
-    args.push_back("-m");         args.push_back("MFP+MERGE");
+    args.push_back("-m");         args.push_back("MF+MERGE");
     args.push_back("-keep-ident");
     args.push_back("--fast");
     args.push_back("--safe");
@@ -4711,6 +4733,10 @@ void mergePartitions(Params &params, Alignment *aln, std::vector<std::vector<int
     if (MPIHelper::getInstance().isMaster()) {
         extractPartitions(prefixPath + aln->name + ".best_scheme.nex", std::string(params.out_prefix) + "partitions.nexus");
     }
+
+    cout << "Partitions merged in "
+         << convert_time(getRealTime() - begin_wallclock_time) << " (of wall-clock time) "
+         << convert_time(getCPUTime() - begin_cpu_time) << " (of CPU time)" << std::endl;
 }
 
 const int BOUND_LEN = 50;
@@ -4820,8 +4846,10 @@ void runhPartition(Params &params, Alignment* aln, std::string prefixPath) {
         }
         sitesOfParts[i].clear();
     }
-    // merge small subsets using PartitionFinder
-    mergePartitions(params, aln, sitesOfParts, prefixPath);
+    if (params.hPartition_PF) {
+        // merge small subsets using PartitionFinder
+        mergePartitions(params, aln, sitesOfParts, prefixPath);
+    } else printPartitions(string(params.out_prefix) + "partitions.nexus", sitesOfParts);
 }
 
 void splitAlignment(Params &params, Alignment* aln) {
@@ -5019,7 +5047,7 @@ void runPhyloAnalysis(Params &params, Checkpoint *checkpoint, IQTree *&tree, Ali
         // run Arndt's plot of tree likelihoods against bootstrap alignments
 //        runBootLhTest(params, alignment, *tree);
         outError("Obsolete feature");
-    } else if (params.hPartition) {
+    } else if (params.hPartition || params.hPartition_PF) {
         splitAlignment(params, alignment);
     } else if (params.num_bootstrap_samples == 0) {
     /********************************************************************************
