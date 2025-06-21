@@ -4609,7 +4609,7 @@ vector<string> getCandidateModels(Params &params, Alignment *aln, std::vector<st
 
     matrices = MPIHelper::getInstance().broadcastDoubleVectors(matrices);
 
-    if (matrices.size() == 400) {
+    if (matrices[0].size() == 400) {
         return models;
     }
 
