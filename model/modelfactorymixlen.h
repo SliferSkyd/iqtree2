@@ -5,6 +5,8 @@
  *      Author: minh
  */
 
+#ifndef MODELFACTORYMIXLEN_H
+#define MODELFACTORYMIXLEN_H
 
 #include "modelfactory.h"
 
@@ -44,3 +46,5 @@ public:
     virtual int getNParameters(int brlen_type);
 
 };
+
+#endif

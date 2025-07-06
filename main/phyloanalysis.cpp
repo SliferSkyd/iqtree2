@@ -64,6 +64,7 @@
 #include "utils/MPIHelper.h"
 #include "timetree.h"
 #include <regex>
+#include "phylotesting.cpp"
 
 #ifdef USE_BOOSTER
 extern "C" {
@@ -4505,6 +4506,55 @@ void printPartitions(std::string filename, std::vector<std::vector<int>> sitesOf
     out.close();
 }
 
+void fastReconstructTree(Params &params, Alignment *aln, std::string prefixPath) {
+    double begin_wallclock_time = getRealTime();
+    double begin_cpu_time = getCPUTime();
+    cout << "Reconstructing tree for partitioned analysis..." << endl;
+
+    std::iostream null_stream(nullptr);
+    std::streambuf* cout_buffer = std::cout.rdbuf(null_stream.rdbuf());
+
+    if (MPIHelper::getInstance().isMaster()) 
+        aln->printAlignment(IN_PHYLIP, (prefixPath + aln->name).c_str());
+
+    MPIHelper::getInstance().barrier();
+
+    std::string arg_s = prefixPath + aln->name;
+    std::string arg_prefix = prefixPath + aln->name;
+    printf("%s\n%s\n", arg_s.c_str(), arg_prefix.c_str());
+    std::vector<std::string> args;
+
+    args.push_back("");
+    args.push_back("-s");         args.push_back(arg_s);
+    args.push_back("--prefix");   args.push_back(arg_prefix);
+    args.push_back("-m");         args.push_back("LG+G");
+    args.push_back("-keep-ident");
+    args.push_back("--fast");
+    args.push_back("--safe");
+    args.push_back("-T");         args.push_back(std::to_string(params.num_threads));
+    args.push_back("--redo");
+    args.push_back("--seed");     args.push_back(std::to_string(params.ran_seed));
+
+    std::vector<char*> argv;
+    for (auto& arg : args) {
+        argv.push_back(&arg[0]);
+    }
+
+    int argc = argv.size();
+    char** argv_raw = argv.data();
+
+    Params::addParams(argc, argv_raw);
+    Checkpoint *checkpoint = new Checkpoint;
+    runPhyloAnalysis(Params::getInstance(), checkpoint);
+    Params::removeParams();
+    std::cout.rdbuf(cout_buffer);
+
+    MPIHelper::getInstance().barrier();
+    cout << "Tree reconstructed in "
+         << convert_time(getRealTime() - begin_wallclock_time) << " (of wall-clock time) "
+         << convert_time(getCPUTime() - begin_cpu_time) << " (of CPU time)" << std::endl;
+}
+
 vector<string> getCandidateModels(Params &params, Alignment *aln, std::vector<std::vector<int>> sitesOfParts, std::string prefixPath) {
     double begin_wallclock_time = getRealTime();
     double begin_cpu_time = getCPUTime();
@@ -4742,65 +4792,79 @@ void mergePartitions(Params &params, Alignment *aln, std::vector<std::vector<int
 const int BOUND_LEN = 50;
 
 void runhPartition(Params &params, Alignment* aln, std::string prefixPath) {
-    const int numSubsets = ceil(aln->getNSite() / 100);
+    std::vector<std::string> models;
+    if (aln->seq_type == SEQ_DNA) {
+        const int numSubsets = ceil(aln->getNSite() / 100);
+            
+        std::vector<double> rates = calcRateFast(aln);
+
+        double maxRate = *max_element(rates.begin(), rates.end());
+        double minRate = *min_element(rates.begin(), rates.end());
         
-    std::vector<double> rates = calcRateFast(aln);
+        double lenPerSubset = (maxRate - minRate) / numSubsets;
 
-    double maxRate = *max_element(rates.begin(), rates.end());
-    double minRate = *min_element(rates.begin(), rates.end());
-    
-    double lenPerSubset = (maxRate - minRate) / numSubsets;
-
-    std::vector<std::vector<int>> sitesOfParts(numSubsets);
-    for (int i = 0; i < rates.size(); ++i) {
-        int idx = -1;
-        for (int j = 0; j < numSubsets; ++j) {
-            if (rates[i] < minRate + lenPerSubset * (j + 1)) {
-                idx = j;
-                break;
+        std::vector<std::vector<int>> sitesOfParts(numSubsets);
+        for (int i = 0; i < rates.size(); ++i) {
+            int idx = -1;
+            for (int j = 0; j < numSubsets; ++j) {
+                if (rates[i] < minRate + lenPerSubset * (j + 1)) {
+                    idx = j;
+                    break;
+                }
             }
+            if (idx == -1) idx = numSubsets - 1;
+            sitesOfParts[idx].push_back(i);
         }
-        if (idx == -1) idx = numSubsets - 1;
-        sitesOfParts[idx].push_back(i);
-    }
-    for (int i = 0; i < numSubsets; ++i) {
-        if (sitesOfParts[i].size() < BOUND_LEN) {
-            if (i < numSubsets - 1) {
-                sitesOfParts[i + 1].insert(sitesOfParts[i + 1].end(), sitesOfParts[i].begin(), sitesOfParts[i].end());
-                sitesOfParts[i].clear();
-            } else {
-                for (int j = i - 1; j >= 0; --j) {
-                    if (sitesOfParts[j].size()) {
-                        sitesOfParts[j].insert(sitesOfParts[j].end(), sitesOfParts[i].begin(), sitesOfParts[i].end());
-                        sitesOfParts[i].clear();
-                        break;
+        for (int i = 0; i < numSubsets; ++i) {
+            if (sitesOfParts[i].size() < BOUND_LEN) {
+                if (i < numSubsets - 1) {
+                    sitesOfParts[i + 1].insert(sitesOfParts[i + 1].end(), sitesOfParts[i].begin(), sitesOfParts[i].end());
+                    sitesOfParts[i].clear();
+                } else {
+                    for (int j = i - 1; j >= 0; --j) {
+                        if (sitesOfParts[j].size()) {
+                            sitesOfParts[j].insert(sitesOfParts[j].end(), sitesOfParts[i].begin(), sitesOfParts[i].end());
+                            sitesOfParts[i].clear();
+                            break;
+                        }
                     }
                 }
             }
         }
-    }
-    
-    std::vector<std::vector<int>> newSitesOfParts;
-    for (int i = 0; i < sitesOfParts.size(); ++i) {
-        if (sitesOfParts[i].size()) {
-            newSitesOfParts.push_back(sitesOfParts[i]);
+        
+        std::vector<std::vector<int>> newSitesOfParts;
+        for (int i = 0; i < sitesOfParts.size(); ++i) {
+            if (sitesOfParts[i].size()) {
+                newSitesOfParts.push_back(sitesOfParts[i]);
+            }
         }
+        std::swap(sitesOfParts, newSitesOfParts);
+        
+        if (sitesOfParts.size() == 1) {
+            if (MPIHelper::getInstance().isMaster())
+                printPartitions(string(params.out_prefix) + "partitions.nexus", sitesOfParts);
+            return;
+        }
+        
+        // find best model for each subset
+        models = getCandidateModels(params, aln, sitesOfParts, prefixPath);
+    } else {
+        StrVector subst, ratehet;
+        getModelSubst(aln->seq_type, aln->isStandardGeneticCode(), params.model_name,
+                  params.model_set, params.model_subset, subst);
+        getRateHet(aln->seq_type, params.model_name, aln->frac_invariant_sites, params.ratehet_set, ratehet);
+        for (const auto& s : subst) {
+            for (const auto& r : ratehet) {
+                models.push_back(s + r);
+            }
+        }
+        fastReconstructTree(params, aln, prefixPath);
     }
-    std::swap(sitesOfParts, newSitesOfParts);
-    
-    if (sitesOfParts.size() == 1) {
-        if (MPIHelper::getInstance().isMaster())
-            printPartitions(string(params.out_prefix) + "partitions.nexus", sitesOfParts);
-        return;
-    }
-    
-    // find best model for each subset
-    std::vector<std::string> models = getCandidateModels(params, aln, sitesOfParts, prefixPath);
 
     const std::string treefile = prefixPath + aln->name + ".treefile";
     // calculate likelihood for each subset based on the best model
     std::vector<DoubleVector> lh(models.size());
-    sitesOfParts = std::vector<std::vector<int>>(models.size());
+    std::vector<std::vector<int>> sitesOfParts(models.size());
 
     // compute likelihood for each subset in parallel
     int blockSize = ceil((double)models.size() / MPIHelper::getInstance().getNumProcesses());
