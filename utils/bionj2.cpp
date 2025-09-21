@@ -902,13 +902,14 @@ public:
 template <class T=NJFloat, class super=BIONJMatrix<T>>
 class BoundingMatrix: public super
 {
+protected:
     using super::n;
     using super::rows;
     using super::rowMinima;
     using super::rowTotals;
     using super::rowToCluster;
     using super::clusters;
-protected:
+
     //
     //Note 1: mutable members are calculated repeatedly, from
     //        others, in member functions marked as const.
@@ -1245,6 +1246,196 @@ public:
     }
 };
 
+
+template <class T=NJFloat, class super=BIONJMatrix<T>, class V=FloatVector, class VB=FloatBoolVector>
+class VectorizedMatrix2: public super
+{
+    //
+    // Hand-vectorized getRowMinima using Agner Fog's vectorclass.
+    // Works for NJMatrix / BIONJMatrix; not for UPGMA_Matrix.
+    //
+    using super::n;
+    using super::rows;
+    using super::rowMinima;
+    using super::rowTotals;
+    using super::calculateRowTotals;
+    using super::getImbalance;
+
+protected:
+    mutable std::vector<T> scratchTotals;
+    mutable std::vector<T> scratchColumnNumbers;
+    const size_t  blockSize;
+
+public:
+    VectorizedMatrix2() : super(), blockSize(VB().size()) {}
+
+    virtual std::string getAlgorithmName() const {
+        return "Vectorized-" + super::getAlgorithmName();
+    }
+
+    virtual void calculateRowTotals() const {
+        super::calculateRowTotals();
+        size_t fluff = MATRIX_ALIGNMENT / sizeof(T);
+        scratchTotals.resize(n + fluff, 0.0);
+        scratchColumnNumbers.resize(n + fluff, 0.0);
+    }
+
+    virtual void getRowMinima() const override {
+        T nless2      = ( n - 2 );
+        T tMultiplier = ( n <= 2 ) ? 0 : (1 / nless2);
+
+        T* tot  = matrixAlign ( scratchTotals.data() );
+        T* nums = matrixAlign ( scratchColumnNumbers.data() );
+
+        for (size_t r=0; r<n; ++r) {
+            tot[r]  = rowTotals[r] * tMultiplier;
+            nums[r] = static_cast<T>(r);
+        }
+
+        rowMinima.resize(n);
+        rowMinima[0].value = infiniteDistance;
+
+        const size_t S  = blockSize;     // lanes (e.g., 8 for AVX, 16 for AVX-512)
+        const size_t U4 = 4 * S;
+        const size_t U2 = 2 * S;
+
+        #pragma omp parallel for schedule(dynamic)
+        for (size_t row=1; row<n; ++row) {
+            Position<T> pos(row, 0, infiniteDistance, 0);
+            const T* rowData = rows[row];
+            const T selfTot  = tot[row];
+
+            // Per-lane running minima & indices (columns congruent mod S)
+            V  minVector = V(infiniteDistance);
+            V  ixVector  = V(T(-1));
+
+            size_t col = 0;
+
+            // ---- 4× unrolled vector scan with per-lane argmin (a0..a3) ----
+            for (; col + U4 <= row; col += U4) {
+                
+
+                // a0
+                V r0; r0.load_a(rowData + col + 0*S);
+                V t0; t0.load_a(tot     + col + 0*S);
+                V a0 = r0 - t0;
+
+                // a1
+                V r1; r1.load_a(rowData + col + 1*S);
+                V t1; t1.load_a(tot     + col + 1*S);
+                V a1 = r1 - t1;
+
+                // a2
+                V r2; r2.load_a(rowData + col + 2*S);
+                V t2; t2.load_a(tot     + col + 2*S);
+                V a2 = r2 - t2;
+
+                // a3
+                V r3; r3.load_a(rowData + col + 3*S);
+                V t3; t3.load_a(tot     + col + 3*S);
+                V a3 = r3 - t3;
+
+                // SIMD argmin across a0..a3 per lane
+                V best    = a0;
+                V bestIdx; bestIdx.load_a(nums + col + 0*S);
+
+                VB m1 = a1 < best;
+                if (horizontal_or(m1)) { [[less_likely]]
+                    best    = select(m1, a1, best);
+                    V idx1; idx1.load_a(nums + col + 1*S);
+                    bestIdx = select(m1, idx1, bestIdx);
+                }
+
+                VB m2 = a2 < best;
+                if (horizontal_or(m2)) { [[less_likely]]
+                    best    = select(m2, a2, best);
+                    V idx2; idx2.load_a(nums + col + 2*S);
+                    bestIdx = select(m2, idx2, bestIdx);
+                }
+
+                VB m3 = a3 < best;
+                if (horizontal_or(m3)) { [[less_likely]]
+                    best    = select(m3, a3, best);
+                    V idx3; idx3.load_a(nums + col + 3*S);
+                    bestIdx = select(m3, idx3, bestIdx);
+                }
+
+                // Now compare group-best with running minVector
+                VB improve = best < minVector;
+                if (horizontal_or(improve)) { [[less_likely]]
+                    minVector = select(improve, best,    minVector);
+                    ixVector  = select(improve, bestIdx, ixVector);
+                }
+            }
+
+            // ---- 2× unrolled tail (a0..a1) ----
+            for (; col + U2 <= row; col += U2) {
+                V r0; r0.load_a(rowData + col + 0*S);
+                V t0; t0.load_a(tot     + col + 0*S);
+                V a0 = r0 - t0;
+
+                V r1; r1.load_a(rowData + col + 1*S);
+                V t1; t1.load_a(tot     + col + 1*S);
+                V a1 = r1 - t1;
+
+                V best    = a0;
+                V bestIdx; bestIdx.load_a(nums + col + 0*S);
+
+                VB m1 = a1 < best;
+                if (horizontal_or(m1)) { [[less_likely]]
+                    best    = select(m1, a1, best);
+                    V idx1; idx1.load_a(nums + col + 1*S);
+                    bestIdx = select(m1, idx1, bestIdx);
+                }
+
+                VB improve = best < minVector;
+                if (horizontal_or(improve)) { [[less_likely]]
+                    minVector = select(improve, best,    minVector);
+                    ixVector  = select(improve, bestIdx, ixVector);
+                }
+            }
+
+            // ---- 1× unrolled tail (single SIMD block) ----
+            for (; col + S <= row; col += S) {
+                V r0; r0.load_a(rowData + col);
+                V t0; t0.load_a(tot     + col);
+                V a0 = r0 - t0;
+
+                VB improve = a0 < minVector;
+                if (horizontal_or(improve)) { [[less_likely]]
+                    minVector = select(improve, a0, minVector);
+                    V idx0; idx0.load_a(nums + col);
+                    ixVector  = select(improve, idx0, ixVector);
+                }
+            }
+
+            // ---- scalar tail up to the diagonal ----
+            for (; col < row; ++col) {
+                T v = rowData[col] - tot[col];
+                if (v < pos.value) {
+                    pos.value  = v;
+                    pos.column = static_cast<int>(col);
+                }
+            }
+
+            // ---- reduce across lanes to finalize (pos.value, pos.column) ----
+            // (lane-wise minima have been accumulated into minVector/ixVector)
+            for (int c = 0; c < static_cast<int>(S); ++c) {
+                T v = minVector[c];
+                if (v < pos.value) {
+                    pos.value  = v;
+                    pos.column = static_cast<int>(ixVector[c]);
+                }
+            }
+
+            pos.value     -= selfTot;
+            pos.imbalance  = getImbalance(pos.row, pos.column);
+            rowMinima[row] = pos;
+        }
+    }
+}; // end of class
+
+
 template <class T=NJFloat, class super=BIONJMatrix<T>, class V=FloatVector, class VB=FloatBoolVector>
     class VectorizedMatrix: public super
 {
@@ -1395,23 +1586,181 @@ public:
     }
 };
 
+// ============================================================
+// Aligned Vectorized Rapid NJ (no Vec8i::gather, safe accesses)
+// ============================================================
+template <class T=NJFloat, class V=FloatVector, class VB=FloatBoolVector>
+class VectorizedRapidNJAligned : public BoundingMatrix<T, NJMatrix<T>>
+{
+    using Base = BoundingMatrix<T, NJMatrix<T>>;
+
+public:
+    VectorizedRapidNJAligned() : Base() {}
+
+    std::string getAlgorithmName() const override {
+        return "RapidNJ-VA"; // Vectorized + Aligned
+    }
+
+protected:
+
+Position<T> getRowMinimumVA(size_t row, T maxTot, T qBest) const {
+    const T kInf       = (T)infiniteDistance;
+    const T nless2     = (this->n - 2);
+    const T tMult      = (this->n <= 2) ? 0 : ( (T)1 / nless2 );
+    const T rowTotSc   = this->rowTotals[row] * tMult;
+    const T bound      = qBest + maxTot + rowTotSc;
+
+    const T*   values    = this->entriesSorted.rows[row];   // sorted asc, +inf sentinel
+    const int* toCluster = this->entryToCluster.rows[row];
+
+    Position<T> pos(row, 0, kInf, 0);
+
+    __m256  minQ    = _mm256_set1_ps(kInf);     // per-lane running minima (Q)
+    __m256i minIdxI = _mm256_set1_epi32(-1);    // matching S/I indices
+    const __m256  vRowTotSc = _mm256_set1_ps(rowTotSc);
+    const __m256i v01234567 = _mm256_set_epi32(7,6,5,4,3,2,1,0);
+
+    size_t col = 0;
+    for (;; col += 8) {
+        // read distances; safe: row memory is padded & aligned
+        __m256 vD  = _mm256_load_ps(values + col);
+
+        // which lanes are still < bound (and naturally < +inf sentinel)
+        __m256 cmpD  = _mm256_cmp_ps(vD, _mm256_set1_ps(bound), _CMP_LT_OQ);
+        int    mask  = _mm256_movemask_ps(cmpD);
+
+        if (mask == 0xFF) {
+            // full block valid → one gather, SIMD update
+            _mm_prefetch((const char*)(toCluster + col + 64), _MM_HINT_T0);
+
+            __m256i vC   = _mm256_load_si256((const __m256i*)(toCluster + col));
+            __m256  vTot = _mm256_i32gather_ps(this->scaledClusterTotals.data(), vC, 4);
+            __m256  vQ   = _mm256_sub_ps(_mm256_sub_ps(vD, vTot), vRowTotSc);
+
+            __m256  better = _mm256_cmp_ps(vQ, minQ, _CMP_LT_OQ);
+            minQ           = _mm256_blendv_ps(minQ, vQ, better);
+
+            __m256i vIdxI  = _mm256_add_epi32(_mm256_set1_epi32((int)col), v01234567);
+            __m256i mb     = _mm256_castps_si256(better);
+            minIdxI        = _mm256_blendv_epi8(minIdxI, vIdxI, mb);
+            continue;
+        }
+
+        if (mask == 0x00) {
+            // first element in this block is already ≥ bound → done
+            break;
+        }
+
+        // mixed: only the first k lanes are < bound → do a tiny scalar tail (k<=7)
+        int k = __builtin_ctz(~mask & 0xFF);   // index of first lane that fails the bound
+        for (int j = 0; j < k; ++j) {
+            const int c = toCluster[col + j];
+            const T   q = values[col + j] - this->scaledClusterTotals[c] - rowTotSc;
+            if (q < pos.value) {
+                pos.value  = q;
+                pos.column = col + j;
+            }
+        }
+        col += k;   // advance to the first failing lane (not used further), then exit
+        break;
+    }
+
+    // fold the 8 SIMD lanes once (NJ-V style)
+    alignas(32) float qBuf[8];
+    alignas(32) int   iBuf[8];
+    _mm256_store_ps(qBuf,   minQ);
+    _mm256_store_si256((__m256i*)iBuf, minIdxI);
+    for (int k = 0; k < 8; ++k) {
+        float qk = qBuf[k];
+        if (qk < pos.value && iBuf[k] >= 0) {
+            pos.value  = qk;
+            pos.column = (size_t)iBuf[k];
+        }
+    }
+
+    // finalize mapping S/I index → (row, otherRow)
+    if (pos.value < kInf) {
+        const int otherRow = this->clusterToRow[ toCluster[pos.column] ];
+        if (otherRow >= 0) {
+            const size_t other = (size_t)otherRow;
+            pos.column   = (other < row) ? other : row;
+            pos.row      = (other < row) ? row   : other;
+            pos.imbalance = this->getImbalance(pos.row, pos.column);
+        }
+    }
+    return pos;
+}
+
+void getRowMinima() const override {
+    const T kInf = (T)infiniteDistance;
+
+    // Prepare per-cluster scaled totals & earlier-cluster maxima (SMP2011 §2.5)
+    const size_t c = this->clusters.size();
+    const T nless2      = (this->n - 2);
+    const T tMultiplier = (this->n <= 2) ? 0 : ( (T)1 / nless2 );
+
+    T maxTot = -kInf;
+    this->scaledClusterTotals.resize(c);
+    this->scaledMaxEarlierClusterTotal.resize(c);
+
+    for (size_t i = 0; i < c; ++i) {
+        const T st = this->clusterTotals[i] * tMultiplier; // dead clusters → -inf here
+        this->scaledClusterTotals[i] = st;
+        this->scaledMaxEarlierClusterTotal[i] = maxTot;
+        if (this->clusterToRow[i] != notMappedToRow) {
+            if (maxTot < st) maxTot = st;
+        }
+    }
+
+    // Global upper bound on min Q
+    T qBest = kInf;
+
+    this->decideOnRowScanningOrder();
+    this->rowMinima.resize(this->n);
+
+    #pragma omp parallel for
+    for (size_t r = 0; r < this->n; ++r) {
+        const size_t row     = this->rowScanOrder[r];
+        const size_t cluster = this->rowToCluster[row];
+        const T maxEarlier   = this->scaledMaxEarlierClusterTotal[cluster];
+
+        Position<T> p = getRowMinimumVA(row, maxEarlier, qBest);
+        this->rowMinima[r] = p;
+
+        if (p.value < qBest) {
+            #pragma omp critical(qbest_update)
+            { if (p.value < qBest) qBest = p.value; }
+        }
+    }
+}
+
+};
+
+// === typedef and factory hook ===
+typedef VectorizedRapidNJAligned<NJFloat> RapidNJ_VA;
 typedef BoundingMatrix<NJFloat, NJMatrix<NJFloat>>      RapidNJ;
 typedef BoundingMatrix<NJFloat, BIONJMatrix<NJFloat>>   RapidBIONJ;
 typedef VectorizedMatrix<NJFloat, NJMatrix<NJFloat>>    VectorNJ;
+typedef VectorizedMatrix2<NJFloat, NJMatrix<NJFloat>>    VectorNJ2;
 typedef VectorizedMatrix<NJFloat, BIONJMatrix<NJFloat>> VectorBIONJ;
 
 void addBioNJ2020TreeBuilders(Factory& f) {
     f.advertiseTreeBuilder( new Builder<NJMatrix<NJFloat>>    ("NJ",      "Neighbour Joining (Saitou, Nei [1987])"));
     f.advertiseTreeBuilder( new Builder<RapidNJ>              ("NJ-R",    "Rapid Neighbour Joining (Simonsen, Mailund, Pedersen [2011])"));
     f.advertiseTreeBuilder( new Builder<VectorNJ>             ("NJ-V",    "Vectorized Neighbour Joining (Saitou, Nei [1987])"));
+    f.advertiseTreeBuilder( new Builder<VectorNJ2>             ("NJ-V2",    "Vectorized Neighbour Joining 2"));
     f.advertiseTreeBuilder( new Builder<BIONJMatrix<NJFloat>> ("BIONJ",   "BIONJ (Gascuel, Cong [2009])"));
     f.advertiseTreeBuilder( new Builder<RapidBIONJ>  ("BIONJ-R", "Rapid BIONJ (Saitou, Nei [1987], Gascuel [2009], Simonson Mailund Pedersen [2011])"));
     f.advertiseTreeBuilder( new Builder<VectorBIONJ> ("BIONJ-V", "Vectorized BIONJ (Gascuel, Cong [2009])"));
     f.advertiseTreeBuilder( new Builder<UPGMA_Matrix<NJFloat>>("UPGMA",    "UPGMA (Sokal, Michener [1958])"));
     f.advertiseTreeBuilder( new Builder<VectorizedUPGMA_Matrix<NJFloat>>("UPGMA-V", "Vectorized UPGMA (Sokal, Michener [1958])"));
     f.advertiseTreeBuilder( new Builder<BoundingMatrix<double>> ("NJ-R-D", "Double precision Rapid Neighbour Joining"));
+        f.advertiseTreeBuilder(
+        new Builder<RapidNJ_VA>("NJ-R-VA",
+            "Rapid Neighbour Joining (vectorized, aligned bounds)"));
+
     const char* defaultName = "RapidNJ";
     f.advertiseTreeBuilder( new Builder<RapidNJ>                (defaultName, "Rapid Neighbour Joining (Simonsen, Mailund, Pedersen [2011]) (default)"));  //Default.
-    f.setNameOfDefaultTreeBuilder(defaultName);
+    f.setNameOfDefaultTreeBuilder("NJ-R-VA");
 }
 }; //end of namespace

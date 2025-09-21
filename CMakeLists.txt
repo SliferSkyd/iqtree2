@@ -583,6 +583,23 @@ elseif (ICC)
     endif()
 endif()
 
+SET(AVX2_FLAGS "-D__SSE3 -D__AVX")
+if (VCC)
+    set(AVX2_FLAGS "${AVX2_FLAGS} /arch:AVX2")
+elseif (CLANG OR GCC)
+    if (__ARM_NEON)
+        set(AVX2_FLAGS "${AVX2_FLAGS} -march=armv8-a+fp+simd+crypto+crc")
+    else()
+        set(AVX2_FLAGS "${AVX2_FLAGS} -mavx2 -mfma")
+    endif()
+elseif (ICC)
+    if (WIN32)
+        set(AVX2_FLAGS "${AVX2_FLAGS} /arch:core-avx2")
+    else()
+        set(AVX2_FLAGS "${AVX2_FLAGS} -march=core-avx2")
+    endif()
+endif()
+
 SET(AVX512_FLAGS "-D__SSE3 -D__AVX")
 if (VCC)
     message("AVX512 not available in Visual C++")
@@ -606,6 +623,10 @@ if (IQTREE_FLAGS MATCHES "fma") # AVX+FMA instruction set
     add_definitions(-D__SSE3 -D__AVX) # define both SSE3 and AVX directive
     set(COMBINED_FLAGS "${COMBINED_FLAGS} ${FMA_FLAGS}")
     #SET(EXE_SUFFIX "${EXE_SUFFIX}-fma")
+elseif (IQTREE_FLAGS MATCHES "avx2") # AVX2+FMA instruction set
+    message("Vectorization : AVX2+FMA")
+    add_definitions(-D__SSE3 -D__AVX)
+    set(COMBINED_FLAGS "${COMBINED_FLAGS} ${AVX2_FLAGS}")
 elseif (IQTREE_FLAGS MATCHES "avx") # AVX instruction set
     message("Vectorization : AVX")
     add_definitions(-D__SSE3 -D__AVX) # define both SSE3 and AVX directive
