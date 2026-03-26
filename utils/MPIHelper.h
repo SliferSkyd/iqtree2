@@ -40,6 +40,7 @@
 
 using namespace std;
 
+#ifdef _IQTREE_MPI
 class MPI_SharedWindow {
 public:
     MPI_SharedWindow(int num_elements);
@@ -63,6 +64,7 @@ private:
     int num_elements;
     int depth_lock;
 };
+#endif
 
 class MPIHelper {
 public:
@@ -165,13 +167,6 @@ public:
         @param ckp Checkpoint object
     */
     void gatherCheckpoint(Checkpoint *ckp);
-
-    /**
-     * Schedules tasks based on the costs of each task
-     * @param costs vector of costs for each task
-     * @return vector of task indices scheduled for the current process
-     */
-    IntVector scheduleTasks(DoubleVector costs);
 
     /**
         wrapper for MPI_Allreduce to perform element-wise summation of vectors across processes
@@ -324,9 +319,18 @@ public:
         MPIHelper::numNNISearch = numNNISearch;
     }
 
+    /**
+     * Schedules tasks based on the costs of each task
+     * @param costs vector of costs for each task
+     * @return vector of task indices scheduled for the current process
+     */
+    IntVector scheduleTasks(DoubleVector costs);
+
+#ifdef _IQTREE_MPI
     int numModels;
 
     MPI_SharedWindow* models;
+#endif
 
 private:
     int numNNISearch;

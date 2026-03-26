@@ -906,10 +906,13 @@ void runModelFinder(Params &params, IQTree &iqtree, ModelCheckpoint &model_info,
     } else {
         // single model selection
         CandidateModel best_model;
+#ifdef _IQTREE_MPI
         if (params.mpi_by_model) 
             best_model = CandidateModelSet().evaluateMPI(params, &iqtree,
                 model_info, models_block, params.num_threads, BRLEN_OPTIMIZE);
-        else if (params.openmp_by_model)
+        else 
+#endif
+        if (params.openmp_by_model)
             best_model = CandidateModelSet().evaluateAll(params, &iqtree,
                 model_info, models_block, params.num_threads, BRLEN_OPTIMIZE);
         else
@@ -1581,6 +1584,7 @@ string CandidateModel::evaluate(Params &params,
     ModelsBlock *models_block,
     int &num_threads, int brlen_type)
 {
+#ifdef _IQTREE_MPI
     // Load checkpoint from file
     if (params.mpi_by_model) {
         MPIHelper::getInstance().models->lock();
@@ -1593,6 +1597,8 @@ string CandidateModel::evaluate(Params &params,
         }
         MPIHelper::getInstance().models->unlock();
     }
+#endif
+
     //string model_name = name;
     Alignment *in_aln = aln;
     IQTree *iqtree = NULL;
@@ -2160,6 +2166,7 @@ void testPartitionModel(Params &params, PhyloSuperTree* in_tree, ModelCheckpoint
     StrVector model_names(in_tree->size(), "");
 
     std::vector<int> part_order;
+#ifdef _IQTREE_MPI
     if (params.mpi_by_model) {
 #ifdef _OPENMP
         parallel_over_partitions = !params.model_test_and_tree && (in_tree->size() >= num_threads);
@@ -2216,7 +2223,9 @@ void testPartitionModel(Params &params, PhyloSuperTree* in_tree, ModelCheckpoint
                 model_info.dump();
             }
         }
-    } else {
+    } else 
+#endif
+    {
         DoubleVector costs(in_tree->size());
         for (i = 0; i < in_tree->size(); i++) {
             Alignment *this_aln = in_tree->at(i)->aln;
@@ -2285,12 +2294,14 @@ void testPartitionModel(Params &params, PhyloSuperTree* in_tree, ModelCheckpoint
             }
         }
 
+#ifdef _IQTREE_MPI
         if (MPIHelper::getInstance().getNumProcesses() > 1) {
             lhsums = MPIHelper::getInstance().sumProcs(lhsums);
             dfsums = MPIHelper::getInstance().sumProcs(dfsums);
             model_names = MPIHelper::getInstance().gatherAllStrings(model_names);
             MPIHelper::getInstance().syncCheckpoints(&model_info);
         }
+#endif
 
         for (auto lh: lhsums) {
             lhsum += lh;
@@ -2303,8 +2314,10 @@ void testPartitionModel(Params &params, PhyloSuperTree* in_tree, ModelCheckpoint
         for (int i = 0; i < in_tree->size(); i++) {
             in_tree->at(i)->aln->model_name = model_names[i];
         }
-        
+
+#ifdef _IQTREE_MPI
         MPIHelper::getInstance().barrier();
+#endif
     }
     // in case ModelOMatic change the alignment
     fixPartitions(in_tree);
@@ -2501,14 +2514,16 @@ void testPartitionModel(Params &params, PhyloSuperTree* in_tree, ModelCheckpoint
 			}
 
         }
-        
+
+#ifdef _IQTREE_MPI
         if (MPIHelper::getInstance().getNumProcesses() > 1) {
             StrVector encoded_better_pairs = better_pairs.encode();
             encoded_better_pairs = MPIHelper::getInstance().gatherStrings(encoded_better_pairs);
             better_pairs.decode(encoded_better_pairs);
             MPIHelper::getInstance().syncCheckpoints(&model_info);
         }
-        
+#endif
+
         // clear the message previous on this line
         // cout << blkStr << "\r" << flush;
         // progress.done();
@@ -2674,7 +2689,9 @@ void testPartitionModel(Params &params, PhyloSuperTree* in_tree, ModelCheckpoint
             // model_info.dump();
             }
         }
+#ifdef _IQTREE_MPI
         MPIHelper::getInstance().syncCheckpoints(&model_info);
+#endif
     }
 
     inf_score = computeInformationScore(lhsum, dfsum, ssize, params.model_test_criterion);
@@ -2699,9 +2716,11 @@ bool isMixtureModel(ModelsBlock *models_block, string &model_str) {
     return false;
 }
 
+#ifdef _IQTREE_MPI
 double CandidateModelSet::getScore(int idx) {
     return ((Params::getInstance().mpi_by_model) ? MPIHelper::getInstance().models->get_shared_memory(idx) : at(idx).getScore());
 }
+#endif
 
 void CandidateModelSet::filterRates(int finished_model) {
     if (Params::getInstance().score_diff_thres < 0)
@@ -2728,7 +2747,7 @@ void CandidateModelSet::filterRates(int finished_model) {
             at(model).setFlag(MF_IGNORED);
 }
 
-
+#ifdef _IQTREE_MPI
 void CandidateModelSet::filterRatesMPI(int finished_model) {
     if (Params::getInstance().score_diff_thres < 0)
         return;
@@ -2759,6 +2778,7 @@ void CandidateModelSet::filterRatesMPI(int finished_model) {
         if (ok_rates.find(at(model).orig_rate_name) == ok_rates.end())
             MPIHelper::getInstance().models->set_shared_memory(model, DBL_MAX);
 }
+#endif
 
 void CandidateModelSet::filterSubst(int finished_model) {
     if (Params::getInstance().score_diff_thres < 0)
@@ -3384,6 +3404,7 @@ CandidateModel CandidateModelSet::evaluateAll(Params &params, PhyloTree* in_tree
     return at(best_model);
 }
 
+#ifdef _IQTREE_MPI
 CandidateModel CandidateModelSet::evaluateMPI(Params &params, PhyloTree* in_tree, ModelCheckpoint &model_info,
                                     ModelsBlock *models_block, int num_threads, int brlen_type,
                                     string in_model_name, bool merge_phase, bool write_info) 
@@ -3708,6 +3729,7 @@ CandidateModel CandidateModelSet::evaluateMPI(Params &params, PhyloTree* in_tree
     remove(checkpointFile.c_str());
     return at(best_model);
 }
+#endif
 
 // to check how many classes from the model string
 int getClassNum(string model_str) {

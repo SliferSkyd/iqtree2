@@ -206,42 +206,6 @@ void MPIHelper::gatherCheckpoint(Checkpoint *ckp) {
     }
 }
 
-IntVector MPIHelper::scheduleTasks(DoubleVector costs)
-{
-    int num_tasks = costs.size();
-    int num_processes = getNumProcesses();
-
-    std::vector<IntVector> process_tasks(num_processes);
-    IntVector task_indices(num_tasks);
-    for (int i = 0; i < num_tasks; ++i) {
-        task_indices[i] = i; // Initialize task indices
-    }
-    // Sort tasks based on costs
-    std::sort(task_indices.begin(), task_indices.end(),
-              [&costs](int a, int b) { return costs[a] > costs[b]; });
-
-    // Distribute tasks evenly across processes
-    std::priority_queue<std::pair<double, int> > task_queue;
-    for (int i = 0; i < getNumProcesses(); ++i) {
-        task_queue.push({0.0, i}); // Initialize with zero cost for each process
-    }
-    for (int i = 0; i < num_tasks; ++i) {
-        // Get the process with the least cost
-        auto [current_cost, proc_id] = task_queue.top();
-        task_queue.pop();
-        
-        // Assign the task to this process
-        process_tasks[proc_id].push_back(task_indices[i]);
-
-        // Update the cost for this process
-        current_cost -= costs[task_indices[i]];
-        task_queue.push({current_cost, proc_id});
-    }
-
-    // Now task_indices contains the process ID for each task
-    return getProcVector(process_tasks);
-}
-
 DoubleVector MPIHelper::sumProcs(DoubleVector vals)
 {
     int proc_size = vals.size();
@@ -488,6 +452,46 @@ vector<string> MPIHelper::gatherAllStrings(const vector<string> &strs)
 
 
 #endif
+
+IntVector MPIHelper::scheduleTasks(DoubleVector costs)
+{
+    int num_tasks = costs.size();
+    int num_processes = getNumProcesses();
+
+    std::vector<IntVector> process_tasks(num_processes);
+    IntVector task_indices(num_tasks);
+    for (int i = 0; i < num_tasks; ++i) {
+        task_indices[i] = i; // Initialize task indices
+    }
+    // Sort tasks based on costs
+    std::sort(task_indices.begin(), task_indices.end(),
+              [&costs](int a, int b) { return costs[a] > costs[b]; });
+
+#ifndef _IQTREE_MPI
+    return task_indices; // If only one process, return all tasks
+#else
+    // Distribute tasks evenly across processes
+    std::priority_queue<std::pair<double, int> > task_queue;
+    for (int i = 0; i < getNumProcesses(); ++i) {
+        task_queue.push({0.0, i}); // Initialize with zero cost for each process
+    }
+    for (int i = 0; i < num_tasks; ++i) {
+        // Get the process with the least cost
+        auto [current_cost, proc_id] = task_queue.top();
+        task_queue.pop();
+        
+        // Assign the task to this process
+        process_tasks[proc_id].push_back(task_indices[i]);
+
+        // Update the cost for this process
+        current_cost -= costs[task_indices[i]];
+        task_queue.push({current_cost, proc_id});
+    }
+
+    // Now task_indices contains the process ID for each task
+    return getProcVector(process_tasks);
+#endif
+}
 
 MPIHelper::~MPIHelper() {
 //    cleanUpMessages();

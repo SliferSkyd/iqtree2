@@ -2851,7 +2851,8 @@ void IQTree::refineBootTrees() {
     
     delete models_block;
 
-        // Sum up the number of refined trees
+#ifdef _IQTREE_MPI
+    // Sum up the number of refined trees
     MPIHelper::getInstance().barrier();
 
     int total_refined_trees = 0;
@@ -2871,6 +2872,9 @@ void IQTree::refineBootTrees() {
             restoreUFBoot(new_checkpoint);
         }
     }
+#else
+    cout << "Total " << refined_trees << " ufboot trees refined" << endl;
+#endif
 
     // restore randstream
     finish_random();
