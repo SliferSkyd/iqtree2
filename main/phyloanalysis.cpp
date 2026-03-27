@@ -4540,6 +4540,12 @@ vector<string> getCandidateModels(Params &params, Alignment *aln, std::vector<st
     args.push_back("--redo");
     args.push_back("--seed");     args.push_back(std::to_string(params.ran_seed));
 
+    if (params.model_test_criterion == MTC_AICC) {
+        args.push_back("-AICc");
+    } else if (params.model_test_criterion == MTC_AIC) {
+        args.push_back("-AIC");
+    }
+
     std::vector<char*> argv;
     for (auto& arg : args) {
         argv.push_back(&arg[0]);
@@ -4715,6 +4721,12 @@ void mergePartitions(Params &params, Alignment *aln, std::vector<std::vector<int
     args.push_back("-T");         args.push_back(std::to_string(params.num_threads));
     args.push_back("--redo");
     args.push_back("--seed");     args.push_back(std::to_string(params.ran_seed));
+
+    if (params.model_test_criterion == MTC_AICC) {
+        args.push_back("-AICc");
+    } else if (params.model_test_criterion == MTC_AIC) {
+        args.push_back("-AIC");
+    }
 
     std::vector<char*> argv;
     for (auto& arg : args) {
