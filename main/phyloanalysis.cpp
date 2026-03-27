@@ -4607,7 +4607,9 @@ vector<string> getCandidateModels(Params &params, Alignment *aln, std::vector<st
         }
     }
 
+#ifdef _IQTREE_MPI
     matrices = MPIHelper::getInstance().broadcastDoubleVectors(matrices);
+#endif
 
     if (matrices[0].size() == 400) {
         return models;
@@ -4812,7 +4814,9 @@ void runhPartition(Params &params, Alignment* aln, std::string prefixPath) {
     }
     
     // gather results from all processes
+#ifdef _IQTREE_MPI
     lh = MPIHelper::getInstance().gatherAllVectors(lh);
+#endif
 
     // reassign sites to subsets
     for (int i = 0; i < aln->getNSite(); ++i) {
