@@ -4421,55 +4421,55 @@ int getPartitionIdx(vector<double> lh, int stg) {
     } 
 }
 
-vector<double> calcLH(Params& params, Alignment* aln, std::string model, std::string treefile, std::string prefixPath) {    
+vector<double> calcLH(Params& params, Alignment* aln, std::string model, std::string treefile) {    
     double begin_wallclock_time = getRealTime();
     double begin_cpu_time = getCPUTime();
    
     std::iostream null_stream(nullptr);
     std::streambuf* cout_buffer = std::cout.rdbuf(null_stream.rdbuf());
-    std::string outputFile;
+    std::string output_path = std::string(params.out_prefix) + ".sitelh" + (MPIHelper::getInstance().getNumProcesses() > 1 ? ("_proc" + std::to_string(MPIHelper::getInstance().getProcessID())) : "");
 
-    std::string filename = prefixPath + aln->name;
-    if (MPIHelper::getInstance().getNumProcesses() > 1) {
-        filename += "_proc" + std::to_string(MPIHelper::getInstance().getProcessID());
+    std::vector<std::string> args;
+
+    args.push_back("");
+    args.push_back("-s");         args.push_back(params.aln_file);
+    args.push_back("-m");         args.push_back(model);
+    args.push_back("-t");         args.push_back(treefile);
+    args.push_back("-pre");       args.push_back(output_path);
+    args.push_back("-keep-ident");
+    args.push_back("--safe");
+    args.push_back("--sitelh");
+    args.push_back("-blfix");
+    args.push_back("--fast");
+    args.push_back("-T");         args.push_back(std::to_string(params.num_threads));
+    args.push_back("-redo");
+    args.push_back("-seed");     args.push_back(std::to_string(params.ran_seed));
+    
+    std::vector<char*> argv;
+    for (auto& arg : args) {
+        argv.push_back(&arg[0]);
     }
-    aln->printAlignment(IN_PHYLIP, filename.c_str());
 
-    char* argv[] = {
-        "",
-        "-s", &filename[0],
-        "-m", &model[0],
-        "-t", &treefile[0],
-        "-keep-ident",
-        "--safe",
-        "--sitelh",
-        "-blfix",
-        "--fast", 
-        "-T", &std::to_string(params.num_threads)[0],
-        "-redo",
-        "-seed", &std::to_string(params.ran_seed)[0]
-    };
-    int argc = sizeof(argv) / sizeof(char*);
+    int argc = argv.size();
+    char** argv_raw = argv.data();
+    
     int numProcesses = MPIHelper::getInstance().getNumProcesses();
     int processID = MPIHelper::getInstance().getProcessID();
 
     MPIHelper::getInstance().setNumProcesses(1);
     MPIHelper::getInstance().setProcessID(0);
-    Params::addParams(argc, argv);
+    Params::addParams(argc, argv_raw);
+    Params::getInstance().SSE = params.SSE;
     Checkpoint *checkpoint = new Checkpoint;
     runPhyloAnalysis(Params::getInstance(), checkpoint);
     Params::removeParams();
 
     MPIHelper::getInstance().setNumProcesses(numProcesses);
     MPIHelper::getInstance().setProcessID(processID);
-
-    outputFile = prefixPath + aln->name + ".sitelh";
-    if (MPIHelper::getInstance().getNumProcesses() > 1) {
-        outputFile = prefixPath + aln->name + "_proc" + std::to_string(MPIHelper::getInstance().getProcessID()) + ".sitelh";
-    }
+    
     std::cout.rdbuf(cout_buffer);
 
-    std::ifstream in(outputFile);
+    std::ifstream in(output_path + ".sitelh");
     std::vector<double> lh;
         
     std::string line;
@@ -4505,32 +4505,27 @@ void printPartitions(std::string filename, std::vector<std::vector<int>> sitesOf
     out.close();
 }
 
-vector<string> getCandidateModels(Params &params, Alignment *aln, std::vector<std::vector<int>> sitesOfParts, std::string prefixPath) {
+vector<string> getCandidateModels(Params &params, Alignment *aln, std::vector<std::vector<int>> sitesOfParts) {
     double begin_wallclock_time = getRealTime();
     double begin_cpu_time = getCPUTime();
     cout << "Computing candidate models for partitioned analysis..." << endl;
 
+    std::string part_file = std::string(params.out_prefix) + ".partitions";
+
     if (MPIHelper::getInstance().isMaster()) 
-        printPartitions(prefixPath + aln->name + ".partitions", sitesOfParts);
+        printPartitions(part_file, sitesOfParts);
     
     std::iostream null_stream(nullptr);
     std::streambuf* cout_buffer = std::cout.rdbuf(null_stream.rdbuf());
 
-    if (MPIHelper::getInstance().isMaster()) 
-        aln->printAlignment(IN_PHYLIP, (prefixPath + aln->name).c_str());
-    
     MPIHelper::getInstance().barrier();
 
-    std::string arg_s = prefixPath + aln->name;
-    std::string arg_prefix = prefixPath + aln->name;
-    std::string arg_p = prefixPath + aln->name + ".partitions";
-    
     std::vector<std::string> args;
 
     args.push_back("");
-    args.push_back("-s");         args.push_back(arg_s);
-    args.push_back("-p");         args.push_back(arg_p);
-    args.push_back("--prefix");   args.push_back(arg_prefix);
+    args.push_back("-s");         args.push_back(params.aln_file);
+    args.push_back("-p");         args.push_back(part_file);
+    args.push_back("--prefix");   args.push_back(std::string(params.out_prefix) + ".MF");
     args.push_back("-m");         args.push_back("MF");
     args.push_back("-keep-ident");
     args.push_back("--fast");
@@ -4553,8 +4548,8 @@ vector<string> getCandidateModels(Params &params, Alignment *aln, std::vector<st
 
     int argc = argv.size();
     char** argv_raw = argv.data();
-
     Params::addParams(argc, argv_raw);
+    Params::getInstance().SSE = params.SSE;
     Checkpoint *checkpoint = new Checkpoint;
     runPhyloAnalysis(Params::getInstance(), checkpoint);
     Params::removeParams();
@@ -4562,7 +4557,7 @@ vector<string> getCandidateModels(Params &params, Alignment *aln, std::vector<st
     
     MPIHelper::getInstance().barrier();
 
-    ifstream inp(prefixPath + aln->name + ".iqtree");
+    ifstream inp(std::string(params.out_prefix) + ".MF.iqtree");
     std::string line;
     std::vector<std::string> models;
         
@@ -4690,28 +4685,23 @@ void extractPartitions(const std::string& inputPath, const std::string& partOut)
     partfile << "end;\n";
 }
 
-void mergePartitions(Params &params, Alignment *aln, std::vector<std::vector<int>> sitesOfParts, std::string prefixPath) {
+void mergePartitions(Params &params, Alignment *aln, std::vector<std::vector<int>> sitesOfParts) {
     double begin_wallclock_time = getRealTime();
     double begin_cpu_time = getCPUTime();
 
     if (MPIHelper::getInstance().isMaster()) 
-        printPartitions(prefixPath + aln->name + ".partitions", sitesOfParts);
+        printPartitions(string(params.out_prefix) + ".partitions", sitesOfParts);
     MPIHelper::getInstance().barrier();
 
     std::iostream null_stream(nullptr);
     std::streambuf* cout_buffer = std::cout.rdbuf(null_stream.rdbuf());
-
-
-    std::string arg_s = prefixPath + aln->name;
-    std::string arg_prefix = prefixPath + aln->name;
-    std::string arg_p = prefixPath + aln->name + ".partitions";
     
     std::vector<std::string> args;
 
     args.push_back("");
-    args.push_back("-s");         args.push_back(arg_s);
-    args.push_back("-p");         args.push_back(arg_p);
-    args.push_back("--prefix");   args.push_back(arg_prefix);
+    args.push_back("-s");         args.push_back(params.aln_file);
+    args.push_back("-p");         args.push_back(string(params.out_prefix) + ".partitions");
+    args.push_back("-pre");   args.push_back(string(params.out_prefix) + ".MERGE");
     args.push_back("-m");         args.push_back("MF+MERGE");
     args.push_back("-keep-ident");
     args.push_back("--fast");
@@ -4736,6 +4726,7 @@ void mergePartitions(Params &params, Alignment *aln, std::vector<std::vector<int
     char** argv_raw = argv.data();
 
     Params::addParams(argc, argv_raw);
+    Params::getInstance().SSE = params.SSE;
     Checkpoint *checkpoint = new Checkpoint;
     runPhyloAnalysis(Params::getInstance(), checkpoint);
     Params::removeParams();
@@ -4744,7 +4735,7 @@ void mergePartitions(Params &params, Alignment *aln, std::vector<std::vector<int
     MPIHelper::getInstance().barrier();
 
     if (MPIHelper::getInstance().isMaster()) {
-        extractPartitions(prefixPath + aln->name + ".best_scheme.nex", std::string(params.out_prefix) + "partitions.nexus");
+        extractPartitions(std::string(params.out_prefix) + ".MERGE.best_scheme.nex", std::string(params.out_prefix) + ".partitions");
     }
 
     cout << "Partitions merged in "
@@ -4754,7 +4745,7 @@ void mergePartitions(Params &params, Alignment *aln, std::vector<std::vector<int
 
 const int BOUND_LEN = 50;
 
-void runhPartition(Params &params, Alignment* aln, std::string prefixPath) {
+void runhPartition(Params &params, Alignment* aln) {
     const int numSubsets = ceil(aln->getNSite() / 100);
         
     std::vector<double> rates = calcRateFast(aln);
@@ -4803,14 +4794,14 @@ void runhPartition(Params &params, Alignment* aln, std::string prefixPath) {
     
     if (sitesOfParts.size() == 1) {
         if (MPIHelper::getInstance().isMaster())
-            printPartitions(string(params.out_prefix) + "partitions.nexus", sitesOfParts);
+            printPartitions(string(params.out_prefix) + ".partitions", sitesOfParts);
         return;
     }
     
     // find best model for each subset
-    std::vector<std::string> models = getCandidateModels(params, aln, sitesOfParts, prefixPath);
+    std::vector<std::string> models = getCandidateModels(params, aln, sitesOfParts);
 
-    const std::string treefile = prefixPath + aln->name + ".treefile";
+    const std::string treefile = string(params.out_prefix) + ".MF.treefile";
     // calculate likelihood for each subset based on the best model
     std::vector<DoubleVector> lh(models.size());
     sitesOfParts = std::vector<std::vector<int>>(models.size());
@@ -4821,7 +4812,7 @@ void runhPartition(Params &params, Alignment* aln, std::string prefixPath) {
     int endID = min(startID + blockSize, (int)models.size());
 
     for (int i = startID; i < endID; ++i) { 
-        lh[i] = calcLH(params, aln, models[i], treefile, prefixPath);
+        lh[i] = calcLH(params, aln, models[i], treefile);
     }
     
     // gather results from all processes
@@ -4863,8 +4854,8 @@ void runhPartition(Params &params, Alignment* aln, std::string prefixPath) {
     }
     if (params.hPartition_PF) {
         // merge small subsets using PartitionFinder
-        mergePartitions(params, aln, sitesOfParts, prefixPath);
-    } else printPartitions(string(params.out_prefix) + "partitions.nexus", sitesOfParts);
+        mergePartitions(params, aln, sitesOfParts);
+    } else printPartitions(string(params.out_prefix) + ".partitions", sitesOfParts);
 }
 
 void splitAlignment(Params &params, Alignment* aln) {
@@ -4872,16 +4863,8 @@ void splitAlignment(Params &params, Alignment* aln) {
     
     double begin_wallclock_time = getRealTime();
     double begin_cpu_time = getCPUTime();
-
-    const std::string prefixPath = string(params.out_prefix) + "/tmp/";
-    if (system(("test -d " + prefixPath).c_str()) == 0) {
-        system(("rm -rf " + prefixPath).c_str());
-    }
-    system(("mkdir " + prefixPath).c_str());
     
-    runhPartition(params, aln, prefixPath);
-
-    system(("rm -rf " + prefixPath).c_str());
+    runhPartition(params, aln);
     
     std::cout << "Split partitions took "
         << convert_time(getRealTime() - begin_wallclock_time) << " (of wall-clock time) "
