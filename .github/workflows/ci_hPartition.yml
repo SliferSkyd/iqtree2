@@ -3,7 +3,7 @@ name: Build hPartition
 on:
   push: 
     branches: ["hPartition"]
-  pull_request:
+    tags: ["hPartition*"] # Triggers on 'hPartition' or 'hPartition-v1', etc.  pull_request:
     branches: ["hPartition"]
 
 # If a Second Commit is Pushed After, and Build is Not Complete, Cancel
@@ -53,15 +53,6 @@ jobs:
         make -j
         file iqtree2 | grep x86-64
 
-    - name: Upload Built Binary
-      # Only upload for one of the gcc & cmake tests
-      if: ${{ matrix.upload }}
-      uses: actions/upload-artifact@v4
-      with:
-        name: Linux x86-64
-        path: build/iqtree2
-        if-no-files-found: error
-
     - name: Run hPartition
       run: |
         cd build
@@ -71,7 +62,24 @@ jobs:
       run: |
         cd build
         ./iqtree2 -s ../example/example.phy -seed 0 -hPartition-pf -undo
-      
+
+    - name: Compress Binary
+      if: ${{ matrix.upload }}
+      shell: bash
+      run: |
+        cd build
+        VERSION=${{ github.ref_name }}
+        VERSION=${VERSION#v}
+        tar -czvf iqtree-${VERSION}-Linux-intel.tar.gz iqtree2
+
+    - name: Upload Release Archive
+      if: ${{ matrix.upload }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: Linux-intel-archive
+        path: build/iqtree-*.tar.gz
+        if-no-files-found: error
+
   build-linux-aarch64:
      name: Linux aarch64
      runs-on: ubuntu-22.04-arm
@@ -95,13 +103,6 @@ jobs:
            make -j
            file iqtree2 | grep aarch64
 
-       - name: Upload Built Binary
-         uses: actions/upload-artifact@v4
-         with:
-           name: Linux AArch64
-           path: build/iqtree2
-           if-no-files-found: error
-
        - name: Run hPartition
          run: |
            cd build
@@ -111,7 +112,21 @@ jobs:
          run: |
            cd build
            ./iqtree2 -s ../example/example.phy -seed 0 -hPartition-pf -undo
-      
+
+       - name: Compress Binary
+         shell: bash
+         run: |
+           cd build
+           VERSION=${{ github.ref_name }}
+           VERSION=${VERSION#v}
+           tar -czvf iqtree-${VERSION}-Linux-arm.tar.gz iqtree2
+
+       - name: Upload Release Archive
+         uses: actions/upload-artifact@v4
+         with:
+           name: Linux-arm-archive
+           path: build/iqtree-*.tar.gz
+           if-no-files-found: error
 
   build-macos-x86_64:
     name: Mac OS x86-64
@@ -137,13 +152,6 @@ jobs:
           cmake .. -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DEIGEN3_INCLUDE_DIR=$(brew --prefix eigen)/include/eigen3
           make -j
           file iqtree2 | grep x86_64
-          
-      - name: Upload Built Binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: Mac x86-64
-          path: build/iqtree2
-          if-no-files-found: error
 
       - name: Run hPartition
         run: |
@@ -154,6 +162,13 @@ jobs:
         run: |
           cd build
           ./iqtree2 -s ../example/example.phy -seed 0 -hPartition-pf -undo
+
+      - name: Upload Raw Binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: Mac-intel-raw
+          path: build/iqtree2
+          if-no-files-found: error
       
   build-macos-arm:
     name: Mac OS ARM64
@@ -180,13 +195,6 @@ jobs:
           gmake -j
           file iqtree2 | grep arm64
 
-      - name: Upload Built Binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: Mac Arm
-          path: build/iqtree2
-          if-no-files-found: error
-          
       - name: Run hPartition
         run: |
           cd build
@@ -196,6 +204,13 @@ jobs:
         run: |
           cd build
           ./iqtree2 -s ../example/example.phy -seed 0 -hPartition-pf -undo
+
+      - name: Upload Raw Binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: Mac-arm-raw
+          path: build/iqtree2
+          if-no-files-found: error
       
   compile-mac-universal:
     name: Mac OS Universal
@@ -205,22 +220,37 @@ jobs:
       - build-macos-arm
     
     steps:
-      - name: Download Artifacts
+      - name: Download Intel Binary
         uses: actions/download-artifact@v4
         with:
-          pattern: Mac *
+          name: Mac-intel-raw
+          path: mac-intel
 
-      - name: Combine Artifacts
-        run: lipo -create -output iqtree2 "Mac x86-64/iqtree2" "Mac Arm/iqtree2"
+      - name: Download ARM Binary
+        uses: actions/download-artifact@v4
+        with:
+          name: Mac-arm-raw
+          path: mac-arm
+
+      - name: Combine Architectures
+        run: lipo -create -output iqtree2 mac-intel/iqtree2 mac-arm/iqtree2
 
       - name: Check Architectures
         run: lipo -archs iqtree2
 
-      - name: Upload Built Binary
+      - name: Compress Binaries
+        run: |
+          VERSION=${{ github.ref_name }}
+          VERSION=${VERSION#v}
+          zip -j iqtree-${VERSION}-macOS-intel.zip mac-intel/iqtree2
+          zip -j iqtree-${VERSION}-macOS-arm.zip mac-arm/iqtree2
+          zip -j iqtree-${VERSION}-macOS.zip iqtree2
+
+      - name: Upload Release Archives
         uses: actions/upload-artifact@v4
         with:
-          name: Mac Universal
-          path: iqtree2
+          name: Mac-archives
+          path: "*.zip"
           if-no-files-found: error
 
   build-windows-x86-64:
@@ -273,13 +303,6 @@ jobs:
           cd build
           file iqtree2.exe | grep x86-64
 
-      - name: Upload Built Binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: Windows x86-64
-          path: build/iqtree2.exe
-          if-no-files-found: error
-
       - name: Run hPartition
         shell: pwsh
         run: |
@@ -291,3 +314,45 @@ jobs:
         run: |
           cd build
           .\iqtree2.exe -s ../example/example.phy -seed 0 -hPartition-pf -undo
+
+      - name: Compress Binary
+        shell: pwsh
+        run: |
+          cd build
+          $Version = "${{ github.ref_name }}"
+          if ($Version.StartsWith("v")) { $Version = $Version.Substring(1) }
+          Compress-Archive -Path iqtree2.exe -DestinationPath "iqtree-$Version-Windows.zip"
+
+      - name: Upload Release Archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows-archive
+          path: build/iqtree-*-Windows.zip
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: 
+      - build-linux-x86-64
+      - build-linux-aarch64
+      - compile-mac-universal
+      - build-windows-x86-64
+    if: startsWith(github.ref, 'refs/tags/hPartition')
+    
+    steps:
+      - name: Download all zipped artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: '*-archive*'
+          path: release-assets
+          merge-multiple: true 
+
+      - name: Create Release and Upload Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "hPartition: An Efficient and Robust Alignment Partitioning Framework for Large-Scale DNA and Protein Phylogenomics"    
+          body_path: .github/release-notes.md 
+          files: release-assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
