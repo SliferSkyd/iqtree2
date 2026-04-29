@@ -3,7 +3,8 @@ name: Build hPartition
 on:
   push: 
     branches: ["hPartition"]
-    tags: ["hPartition*"] # Triggers on 'hPartition' or 'hPartition-v1', etc.  pull_request:
+    tags: ["hPartition*"]
+  pull_request:  
     branches: ["hPartition"]
 
 # If a Second Commit is Pushed After, and Build is Not Complete, Cancel
