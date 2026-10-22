@@ -1,5 +1,11 @@
 #!/bin/bash
 
+# Paths to the three binaries used below. Override them in the environment rather than
+# editing this file:  HPAR=/path/to/iqtree2 ./hPartition.sh
+HPAR=$(readlink -f "${HPAR:-../build/iqtree2}")                 # the hPartition fork of IQ-TREE 2
+IQ=$(command -v "${IQ:-iqtree2}" || readlink -f "${IQ:-iqtree2}")                              # stock IQ-TREE 2.4.0, used for evaluation only
+PYTHON=${PYTHON:-python3}
+
 # Directory where the PBS scripts will be generated
 output_script_dir="../pbs_scripts"
 mkdir -p "$output_script_dir"
@@ -11,9 +17,9 @@ for file in ../test/*.phy; do
   base_name=$(basename "$file" .phy)
 
   # Define the output directory for each file
-  output_dir1="../output/real/hPar-PF/$base_name/"
-  output_dir2="../output/real/hPar-PF-score/$base_name/"
-  partition_dir="../output/real/hPar-PF/$base_name/partitions.nexus"
+  output_dir1="../output/real/hPar/$base_name/"
+  output_dir2="../output/real/hPar-score/$base_name/"
+  partition_dir="../output/real/hPar/$base_name/partitions.nexus"
 
   mkdir -p "$output_dir1"
   mkdir -p "$output_dir2"
@@ -35,15 +41,15 @@ module avail
 module list
 export OMP_NUM_THREADS=1
 
-/datausers/ioit/thaontp/danquan/partitionAnalysis/build/iqtree2-mpi \\
+"$HPAR" \\
   -seed 0 \\
   -s "$file" \\
   -pre "$output_dir1" \\
   -mset JC69,F81,HKY,GTR \\
-  -redo -hPartition-pf \\
+  -redo -hPartition \\
   > "$output_dir1/cmd.log"
 
-/datausers/ioit/thaontp/danquan/partitionAnalysis/iqtree-2.4.0-Linux-intel/bin/iqtree2 \\
+"$IQ" \\
   -seed 0 \\
   -s "$file" \\
   -p "$partition_dir" \\

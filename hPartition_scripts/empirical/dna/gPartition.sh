@@ -1,19 +1,25 @@
 #!/bin/bash
 
+# Paths to the three binaries used below. Override them in the environment rather than
+# editing this file:  HPAR=/path/to/iqtree2 ./gPartition.sh
+HPAR=$(readlink -f "${HPAR:-../build/iqtree2}")                 # the hPartition fork of IQ-TREE 2
+IQ=$(command -v "${IQ:-iqtree2}" || readlink -f "${IQ:-iqtree2}")                              # stock IQ-TREE 2.4.0, used for evaluation only
+PYTHON=${PYTHON:-python3}
+
 # Directory where the PBS scripts will be generated
 output_script_dir="../pbs_scripts"
 mkdir -p "$output_script_dir"
 
 
-# Loop through all .phy files in ../test/AA/
-for file in ../test/AA/*; do
+# Loop through all .phy files in ../test/
+for file in ../test/*.phy; do
 # Extract the base filename without the extension
   base_name=$(basename "$file" .phy)
 
   # Define the output directory for each file
-  output_dir1="../output/AA/mPar/$base_name/"
-  output_dir2="../output/AA/mPar-score/$base_name/"
-  partition_dir="../output/AA/mPar/$base_name/Results/par.${base_name}"
+  output_dir1="../output/real/gPar/$base_name/"
+  output_dir2="../output/real/gPar-score/$base_name/"
+  partition_dir="../output/real/gPar/$base_name/${base_name}.phy.FINAL.nex"
 
   mkdir -p "$output_dir1"
   mkdir -p "$output_dir2"
@@ -23,7 +29,7 @@ for file in ../test/AA/*; do
   script_path="$output_script_dir/${base_name}_job.pbs"
   cat << EOF > "$script_path"
 #!/bin/bash
-#PBS -N ${base_name}_mPar
+#PBS -N ${base_name}_gPar
 #PBS -j oe
 #PBS -m abe
 #PBS -l select=1:ncpus=1:ompthreads=1:mem=10G:mpiprocs=1
@@ -36,16 +42,16 @@ module list
 export OMP_NUM_THREADS=1
 
 cd \$PBS_O_WORKDIR
-cd ../mPartition
-source deactivate
-python --version
+cd ../gPartition
+conda deactivate
+"$PYTHON" --version
 
-python mPartition.py \\
-  -f ../test/AA/${base_name} \\
+"$PYTHON" gPartition.py \\
+  -f ../test/${base_name}.phy \\
   -o "$output_dir1" \\
   > "$output_dir1/cmd.log"
 
-/datausers/ioit/thaontp/danquan/partitionAnalysis/iqtree-2.4.0-Linux-intel/bin/iqtree2 \\
+"$IQ" \\
   -seed 0 \\
   -s "$file" \\
   -p "$partition_dir" \\
@@ -56,7 +62,7 @@ python mPartition.py \\
 EOF
 
   echo "Generated PBS script for $file at $script_path"
-  #qsub $script_path
+  qsub $script_path
 
 
 done

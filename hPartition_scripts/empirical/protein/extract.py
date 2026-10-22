@@ -58,8 +58,13 @@ def main():
     parser.add_argument("input_nexus", help="Input .nex file with matrix and CHARSETs")
     parser.add_argument("k", type=int, help="Number of CHARSETs to select")
     parser.add_argument("output_phylip", help="Output PHYLIP file")
+    parser.add_argument("--seed", type=int, default=0,
+                        help="Random seed for the CHARSET draw (default 0). The subsets "
+                             "benchmarked in the paper are the deposited alignments; rerunning "
+                             "with a different seed draws different loci.")
 
     args = parser.parse_args()
+    random.seed(args.seed)
 
     # Load alignment
     aln = AlignIO.read(args.input_nexus, "nexus")
@@ -70,7 +75,7 @@ def main():
         raise ValueError(f"Only {len(charsets)} CHARSETs available, but {args.k} requested.")
 
     selected = random.sample(list(charsets.keys()), args.k)
-    print(f"Selected CHARSETs: {selected}")
+    print(f"Selected CHARSETs (seed {args.seed}): {selected}")
 
     subset = extract_and_concat(aln, selected, charsets)
     write_phylip(subset, args.output_phylip)

@@ -1,5 +1,11 @@
 #!/bin/bash
 
+# Paths to the three binaries used below. Override them in the environment rather than
+# editing this file:  HPAR=/path/to/iqtree2 ./gPartition.sh
+HPAR=$(readlink -f "${HPAR:-../build/iqtree2}")                 # the hPartition fork of IQ-TREE 2
+IQ=$(command -v "${IQ:-iqtree2}" || readlink -f "${IQ:-iqtree2}")                              # stock IQ-TREE 2.4.0, used for evaluation only
+PYTHON=${PYTHON:-python3}
+
 # Directory where the PBS scripts will be generated
 output_script_dir="../pbs_scripts"
 mkdir -p "$output_script_dir"
@@ -39,15 +45,15 @@ module load mpi/openmpi-x86_64
 export OMP_NUM_THREADS=1
 
 cd ../gPartition
-source deactivate
-python --version
+conda deactivate
+"$PYTHON" --version
 
-python gPartition.py \\
+"$PYTHON" gPartition.py \\
   -f "$file" \\
   -o "$output_dir1" \\
   > "$output_dir1/cmd.log"
 
-/datausers/ioit/thaontp/danquan/partitionAnalysis/iqtree-2.4.0-Linux-intel/bin/iqtree2 \\
+"$IQ" \\
   -seed 0 \\
   -s "$file" \\
   -p "$partition_dir" \\
