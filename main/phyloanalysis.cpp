@@ -1205,7 +1205,10 @@ void reportSubstitutionProcess(ostream &out, Params &params, IQTree &tree)
         ckp->startStruct("matrix");
 
         stringstream ss;
-        double full_mat[400];
+        // Sized per model. A fixed double[400] holds an amino-acid Q matrix exactly and anything
+        // smaller with room to spare, but a codon model has 61 states, so getQMatrix wrote 3,721
+        // doubles into it and overran the stack. Partitioned codon runs segfaulted here.
+        vector<double> full_mat;
 
         for (it = stree->begin(), part = 0; it != stree->end(); it++, part++) {
             out.width(4);
@@ -1215,8 +1218,10 @@ void reportSubstitutionProcess(ostream &out, Params &params, IQTree &tree)
                 out << left << (*it)->getModelName() << " " << (*it)->treeLength() << "  " << (*it)->getModelNameParams(show_full_params) << endl;
             else
                 out << left << (*it)->getModelName() << " " << stree->part_info[part].part_rate  << "  " << (*it)->getModelNameParams(show_full_params) << endl;
-            (*it)->getModel()->getQMatrix(full_mat);
-            ckp->putArray(std::to_string(part), (*it)->getModel()->num_states * (*it)->getModel()->num_states, full_mat);      
+            int part_states = (*it)->getModel()->num_states;
+            full_mat.resize((size_t) part_states * part_states);
+            (*it)->getModel()->getQMatrix(full_mat.data());
+            ckp->putArray(std::to_string(part), part_states * part_states, full_mat.data());      
         }
         ckp->endStruct();
         out << endl;
@@ -4495,7 +4500,10 @@ vector<double> calcLH(Params& params, Alignment* aln, std::string model, std::st
     return lh;
 };
 
-void printPartitions(std::string filename, std::vector<std::vector<int>> sitesOfParts) {
+// Charsets are written in the units the engine's partition reader expects for the data type: one
+// index per site, except for codon data, where the reader works in nucleotide coordinates and
+// site i has to be written as the triplet 3i-2..3i.
+void printPartitions(std::string filename, std::vector<std::vector<int>> sitesOfParts, bool codon) {
     int n = sitesOfParts.size();
     ofstream out(filename);
     out << "#nexus\nbegin sets;\n";
@@ -4503,7 +4511,9 @@ void printPartitions(std::string filename, std::vector<std::vector<int>> sitesOf
         if (sitesOfParts[i].empty()) continue;
         out << "charset " << "P" << i << " = ";
         for (int j = 0; j < sitesOfParts[i].size(); ++j) {
-            out << sitesOfParts[i][j] + 1;
+            int site = sitesOfParts[i][j] + 1;
+            if (codon) out << 3 * site - 2 << "-" << 3 * site;
+            else out << site;
             if (j < sitesOfParts[i].size() - 1) out << ",";
         }
         out << ";\n";
@@ -4520,7 +4530,7 @@ vector<string> getCandidateModels(Params &params, Alignment *aln, std::vector<st
     std::string part_file = std::string(params.out_prefix) + ".partitions";
 
     if (MPIHelper::getInstance().isMaster()) 
-        printPartitions(part_file, sitesOfParts);
+        printPartitions(part_file, sitesOfParts, aln->seq_type == SEQ_CODON);
     
     std::iostream null_stream(nullptr);
     std::streambuf* cout_buffer = std::cout.rdbuf(null_stream.rdbuf());
@@ -4704,7 +4714,7 @@ void mergePartitions(Params &params, Alignment *aln, std::vector<std::vector<int
     double begin_cpu_time = getCPUTime();
 
     if (MPIHelper::getInstance().isMaster()) 
-        printPartitions(string(params.out_prefix) + ".partitions", sitesOfParts);
+        printPartitions(string(params.out_prefix) + ".partitions", sitesOfParts, aln->seq_type == SEQ_CODON);
     MPIHelper::getInstance().barrier();
 
     std::iostream null_stream(nullptr);
@@ -4815,7 +4825,7 @@ void runhPartition(Params &params, Alignment* aln) {
     
     if (sitesOfParts.size() == 1) {
         if (MPIHelper::getInstance().isMaster())
-            printPartitions(string(params.out_prefix) + ".partitions", sitesOfParts);
+            printPartitions(string(params.out_prefix) + ".partitions", sitesOfParts, aln->seq_type == SEQ_CODON);
         return;
     }
     
@@ -4876,7 +4886,7 @@ void runhPartition(Params &params, Alignment* aln) {
     if (params.hPartition_PF) {
         // merge small subsets using PartitionFinder
         mergePartitions(params, aln, sitesOfParts);
-    } else printPartitions(string(params.out_prefix) + ".partitions", sitesOfParts);
+    } else printPartitions(string(params.out_prefix) + ".partitions", sitesOfParts, aln->seq_type == SEQ_CODON);
 }
 
 void splitAlignment(Params &params, Alignment* aln) {
