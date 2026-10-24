@@ -358,11 +358,15 @@ jobs:
         run: |
           VERSION=${{ github.ref_name }}
           
-          # Create the .zip archive (excluding .git history)
-          zip -r release-assets/iqtree-${VERSION}-source-with-submodules.zip . -x "*.git*"
-          
-          # Create the .tar.gz archive (excluding .git history)
-          tar --exclude='.git' -czvf release-assets/iqtree-${VERSION}-source-with-submodules.tar.gz .
+          # Both archives are written into release-assets/, which is itself inside the directory
+          # being archived, so release-assets must be excluded. Without that, tar reads the
+          # tar.gz it is still writing, warns "file changed as we read it" and exits 1, and the
+          # zip silently bundles the platform binaries into the source archive.
+          zip -r release-assets/iqtree-${VERSION}-source-with-submodules.zip . \
+              -x "*.git*" -x "release-assets/*"
+
+          tar --exclude='.git' --exclude='./release-assets' \
+              -czf release-assets/iqtree-${VERSION}-source-with-submodules.tar.gz .
 
       - name: Create Release and Upload Assets
         uses: softprops/action-gh-release@v2
