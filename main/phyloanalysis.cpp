@@ -4444,6 +4444,13 @@ vector<double> calcLH(Params& params, Alignment* aln, std::string model, std::st
     args.push_back("-T");         args.push_back(std::to_string(params.num_threads));
     args.push_back("-redo");
     args.push_back("-seed");     args.push_back(std::to_string(params.ran_seed));
+    // Propagate the sequence type, which this invocation would otherwise re-detect from the file.
+    // Detection recovers it for alphabets that look distinct -- binary, morphological -- but codon
+    // data is indistinguishable from DNA, so the models would be fitted to the wrong alphabet. Only
+    // an explicit -st is forwarded, so runs that did not give one behave exactly as before.
+    if (params.sequence_type) {
+        args.push_back("-st");    args.push_back(std::string(params.sequence_type));
+    }
     
     std::vector<char*> argv;
     for (auto& arg : args) {
@@ -4534,6 +4541,13 @@ vector<string> getCandidateModels(Params &params, Alignment *aln, std::vector<st
     args.push_back("-T");         args.push_back(std::to_string(params.num_threads));
     args.push_back("--redo");
     args.push_back("--seed");     args.push_back(std::to_string(params.ran_seed));
+    // Propagate the sequence type, which this invocation would otherwise re-detect from the file.
+    // Detection recovers it for alphabets that look distinct -- binary, morphological -- but codon
+    // data is indistinguishable from DNA, so the models would be fitted to the wrong alphabet. Only
+    // an explicit -st is forwarded, so runs that did not give one behave exactly as before.
+    if (params.sequence_type) {
+        args.push_back("-st");    args.push_back(std::string(params.sequence_type));
+    }
 
     if (params.model_test_criterion == MTC_AICC) {
         args.push_back("-AICc");
@@ -4710,6 +4724,13 @@ void mergePartitions(Params &params, Alignment *aln, std::vector<std::vector<int
     args.push_back("-T");         args.push_back(std::to_string(params.num_threads));
     args.push_back("--redo");
     args.push_back("--seed");     args.push_back(std::to_string(params.ran_seed));
+    // Propagate the sequence type, which this invocation would otherwise re-detect from the file.
+    // Detection recovers it for alphabets that look distinct -- binary, morphological -- but codon
+    // data is indistinguishable from DNA, so the models would be fitted to the wrong alphabet. Only
+    // an explicit -st is forwarded, so runs that did not give one behave exactly as before.
+    if (params.sequence_type) {
+        args.push_back("-st");    args.push_back(std::string(params.sequence_type));
+    }
 
     if (params.model_test_criterion == MTC_AICC) {
         args.push_back("-AICc");
