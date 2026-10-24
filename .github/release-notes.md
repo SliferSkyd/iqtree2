@@ -1,67 +1,75 @@
-This release introduces **hPartition**, a novel computational partitioning framework that simultaneously optimizes computational efficiency and model fit for genome-scale phylogenetic inference. Fully integrated into IQ-TREE 2, hPartition is capable of efficiently analyzing massive alignments involving millions of sites accurately and at a fraction of the time required by existing wrapper-based methods.
+**hPartition** is a partitioning framework implemented natively inside IQ-TREE 2, which builds a partitioning scheme from site rates rather than from predefined gene or codon boundaries, and does so at a fraction of the time and memory that wrapper-based methods need.
+
+### 🔄 Changes since hPartition-v1.2
+Codon alignments now run. Three faults were fixed, none of which changes any previously reported result:
+
+* the internal IQ-TREE invocations did not pass on the sequence type, so codon data was re-detected from the file and taken for nucleotide data;
+* schemes were written in codon indices, where the engine's partition reader expects nucleotide coordinates for codon data;
+* the buffer exporting a subset's rate matrix was fixed at the 400 entries of an amino-acid matrix, which a 61-state codon model overran, aborting any partitioned codon run.
+
+Schemes built from nucleotide, binary and morphological data are byte-identical to those of v1.2.
 
 ### ✨ Key Features
-* **Native IQ-TREE 2 Integration:** Implemented directly in C++ within the IQ-TREE 2 engine for significantly improved memory usage, tight integration with core algorithms, and unparalleled computational speed.
-* **Hybrid Partitioning Strategy:** Incorporates fast, model-free evolutionary rate estimation via `fastTIGER`, followed by seed partitioning, substitution model unifying, and probabilistic site repartitioning/cleanup.
-* **Broad Data Support:** Fully applicable to both large-scale DNA and protein/amino acid alignments.
-* **Invariant Site Handling:** Distributes invariant sites probabilistically across partitions based on best-fit rather than grouping them into a single cluster, resolving biases that plagued earlier partitioning methods.
-* **hPartition-PF:** Includes an extended variant (`-hPartition-pf`) that incorporates PartitionFinder's heuristic search strategy to merge resulting subsets, yielding highly parsimonious schemes with better model fit.
+* **Native IQ-TREE 2 Integration:** Implemented directly in C++ within the IQ-TREE 2 engine. Model fitting, site-wise likelihood evaluation and reassignment share one process and one in-memory alignment, and the framework inherits the engine's alignment and state-space handling rather than reimplementing it.
+* **Hybrid Partitioning Strategy:** Model-free evolutionary rate estimation via a generalized `fastTIGER`, then seed binning, candidate-model selection, likelihood-based site reassignment, and a cleanup pass over undersized subsets.
+* **Data Types:** Benchmarked on nucleotide and amino-acid alignments, and verified to run unchanged on binary, morphological and codon data. Only the nucleotide and amino-acid results are benchmarks; the other three are checks that the pipeline runs.
+* **Invariant Site Handling:** Invariant sites are carried through the pipeline at rate zero and settled by likelihood-proportional sampling, so they disperse across the scheme instead of collecting in one zero-variance cluster. Small entirely invariant subsets still occur — in five of the eight DNA schemes examined — but no subset holds more than 11.8% of an alignment's invariant sites.
+* **hPartition-PF:** An extended variant (`-hPartition-pf`) that passes the scheme to IQ-TREE's relaxed-clustering merge search. It produces markedly smaller schemes on every DNA dataset tested, at 1.2 to 13.9 times the runtime, and improves BIC on 11 of 17.
 
-### 📊 Performance Highlights
-* **Speed:** Completes partitioning tasks drastically faster than `gPartition`, `mPartition`, and `PsiPartition`.
-* **Accuracy:** Consistently achieves better BIC/AICc scores on empirical datasets, and reconstructs more accurate phylogenies (lowest Robinson-Foulds distances) on simulated datasets.
-* **Scalability:** Easily handles massive alignments with up to hundreds of thousands of sites where other memory-intensive methods fail.
+### 📊 Benchmark Results
+* **Model fit:** Lowest BIC of the methods compared on 16 of 17 empirical DNA alignments, 10 of 12 protein alignments, and three of four multi-locus alignments containing ribosomal or transfer RNA.
+* **Topological accuracy:** On 100 simulated alignments per dataset, hPartition recovers a closer tree than gPartition on 56 and than PsiPartition on 66 (SimDNA1), and on 70 and 85 respectively (SimDNA2); all four comparisons are significant under a two-sided Wilcoxon signed-rank test. The advantage is consistent rather than concentrated, but it is not universal.
+* **Speed:** Against the fastest competitor on each alignment, 1.0–6.4× lower wall-clock time on DNA and 2.4–25.7× on protein.
+* **Scalability:** Completes alignments on which the alternatives exceed a 10 GB memory allocation.
 
-### 🧪 Benchmark Scripts & Reproducibility  
-The scripts used to perform the experiments on both empirical and simulated datasets, along with instructions on how to replicate the benchmarking process, are included in this repository. 
-Please see the [hPartition_scripts](cci:7://file:///Users/hoangvu/iqtree2/hPartition_scripts:0:0-0:0) directory and refer to the [hPartition_scripts/README.md](cci:7://file:///Users/hoangvu/iqtree2/hPartition_scripts/README.md:0:0-0:0) for a comprehensive guide on the script workflows, execution, and evaluation procedures.
+### 🧪 Benchmark Scripts & Reproducibility
+The scripts that produced every experiment in the manuscript are in `hPartition_scripts/`, with `revision/` holding those added during review (the RNA benchmark, the matched-model-set comparison, the Stage-2 ablation and the binary-data check). `hPartition_scripts/README.md` documents the two clusters the work ran on, how to point the scripts at your own binaries, and what each one produces.
 
 ### 🚀 Usage
 
-To partition your alignment using the ultra-fast standard **hPartition**, run:
+To partition an alignment with standard **hPartition**:
 
 ```bash
-iqtree2 -s ALIGNMENT_FILE -mset JC69,F81,HKY,GTR -hPartition # For DNA datasets
-iqtree2 -s ALIGNMENT_FILE -hPartition # For Protein datasets
+iqtree2 -s ALIGNMENT_FILE -mset JC69,F81,HKY,GTR -hPartition   # DNA
+iqtree2 -s ALIGNMENT_FILE -hPartition                          # protein
 ```
-To use the extended **hPartition-PF**, simply append `-pf`:
+
+For the merging extension **hPartition-PF**, append `-pf`:
+
 ```bash
-iqtree2 -s ALIGNMENT_FILE -mset JC69,F81,HKY,GTR -hPartition-pf # For DNA datasets
+iqtree2 -s ALIGNMENT_FILE -mset JC69,F81,HKY,GTR -hPartition-pf   # DNA
 ```
+
+The criterion defaults to BIC; `--AIC` and `--AICc` select the others. The scheme depends on the random seed, so hold it fixed within an analysis: every result reported in the manuscript was obtained at `-seed 0` on a single core.
 
 ### 🛠️ Compilation from Source
-Pre-compiled binaries for Linux, macOS, and Windows are available in the assets below. If you need to compile from source, the default instructions for Linux are provided below.
+Pre-compiled binaries for Linux, macOS, and Windows are in the assets below. To compile from source:
 
-> **⚠️ IMPORTANT:** Do **not** use the default "Source code (zip)" or "Source code (tar.gz)" links automatically generated by GitHub at the very bottom of this page, as they do not include the required Git submodules. Please download the explicitly named `iqtree-...-source-with-submodules` archive attached in the assets.
+> **⚠️ IMPORTANT:** Do **not** use the "Source code (zip)" or "Source code (tar.gz)" links GitHub generates at the bottom of this page — they omit the required Git submodules. Download the `iqtree-...-source-with-submodules` archive from the assets instead.
 
 **Requirements (Linux):**
-* A C++ compiler (GCC >= 4.8, Clang, or Intel C++ compiler)
-* CMake (version >= 2.8.10)
-* Boost, Eigen3, and OpenMP libraries (typically available via your package manager, e.g., `sudo apt-get install libboost-dev libeigen3-dev`).
+* A C++ compiler (GCC >= 4.8, Clang, or Intel C++)
+* CMake >= 2.8.10
+* Boost, Eigen3 and OpenMP (e.g. `sudo apt-get install libboost-dev libeigen3-dev`)
 
-**Default Compilation (Linux):**
 ```bash
-# 1. Extract the downloaded source code archive and enter the directory
+# 1. Extract the source archive and enter the directory
 unzip iqtree-<version>-source-with-submodules.zip
 cd iqtree2
 
-# 2. Create a build directory
-mkdir build
-cd build
-
-# 3. Configure and compile
+# 2. Build
+mkdir build && cd build
 cmake ..
-make -j # Uses all CPU cores to speed up compilation
+make -j
 ```
 
-Once compilation is complete, the iqtree2 executable will be located inside the build folder.
+The `iqtree2` executable is left in the build folder.
 
-*Troubleshooting:* If `cmake ..` fails with a message about Eigen3 not found, install the Eigen3 library and try again. If it still fails, you must manually specify the downloaded directory of Eigen3:
+*Troubleshooting:* if `cmake ..` reports that Eigen3 is missing, install it and retry; if it still fails, give the path explicitly:
 
 ```bash
 cmake -DEIGEN3_INCLUDE_DIR=<eigen3_dir> ..
 make -j
 ```
 
-**macOS, Windows, and Advanced Builds:**
-For instructions on compiling under macOS, Windows, or for advanced configurations (such as MPI, ARM processors, or Xcode projects), please refer to the Official IQ-TREE Compilation Guide.
+**macOS, Windows, and advanced builds:** see the official IQ-TREE compilation guide for macOS, Windows, MPI, ARM, and Xcode builds.

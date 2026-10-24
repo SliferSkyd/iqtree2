@@ -12,7 +12,7 @@ The work spans two clusters, because the first was decommissioned between the or
 | CPU | Intel Xeon Gold 6132 @ 2.60 GHz, 28 cores/node | Intel Xeon E5-2697 v4 @ 2.30 GHz, 32 cores/node |
 | Scheduler | PBS (`qsub`) | Slurm (`sbatch`) |
 
-Both clusters are composed of homogeneous nodes, and on both every job of every method requested the same resources: **1 CPU core, 1 OpenMP thread, 1 MPI process and 10 GB of memory**, with random seed 0.
+Both clusters are composed of homogeneous nodes, and on both every job of every method requested the same resources: **1 CPU core and 10 GB of memory**, with random seed 0.
 
 Wall-clock times are not comparable between the two clusters, and no table or figure in the paper mixes them. Where a revision experiment compares hPartition against a competing method, that method was rerun on the replacement cluster rather than taken from the earlier tables.
 
@@ -116,4 +116,4 @@ Added in response to the reviewers; all ran on the replacement cluster under Slu
 * **`rna.sh`** — the four multi-locus alignments containing ribosomal or transfer RNA (Tables 4 and 6; AICc in Supplementary Table S6). Note that no method compared here models the covariation between paired stem positions: IQ-TREE 2.4.0 provides no RNA secondary-structure model, so the comparison is between partitioning schemes built on site-independent models.
 * **`matched_model_set.sh`** — reruns hPartition with `-mset` omitted, so that it and gPartition search the same candidate set, and reruns gPartition beside it on the same node (Supplementary Table S4). This tests whether the difference in model fit follows from the model sets rather than the partitioning.
 * **`stage2_ablation.sh`** — three builds differing **only** in Stage 2, everything downstream identical, isolating the seeding step (Supplementary Table S5). It also runs the standard build at five seeds, so the ablation differences can be read against hPartition's own seed-to-seed variation. The two patched builds are separate checkouts of this repository; point `GPAR2` and `NOVAR` at their binaries.
-* **`binary_data.sh`** — RY-recodes a DNA alignment and runs it with `-st BIN`, checking the claim that the pipeline is not restricted to four states. Codon and morphological data are not tested, and the paper does not claim they are.
+* **`binary_data.sh`** — RY-recodes a DNA alignment and runs it with `-st BIN`, checking the claim that the pipeline is not restricted to four states. Morphological and codon data were checked the same way, on simulated alignments; neither is benchmarked and the paper does not claim they are.
